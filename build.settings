@@ -1,0 +1,44 @@
+-- build.settings
+-- Solar2D Build Settings
+
+settings = {
+    orientation = {
+        default = "landscapeRight",
+        supported = { "landscapeLeft", "landscapeRight" }
+    },
+    
+    android = {
+        usesPermissions = {
+            "android.permission.INTERNET",
+            "android.permission.ACCESS_NETWORK_STATE",
+        },
+    },
+    
+    iphone = {
+        xcassets = "Images.xcassets",
+        plist = {
+            UIStatusBarHidden = true,
+            UILaunchStoryboardName = "LaunchScreen",
+        },
+    },
+    
+    plugins = {
+        ["plugin.gpgs"] = {
+            publisherId = "com.coronalabs",
+            supportedPlatforms = { android=true }
+        },
+        ["plugin.gamecenter"] = {
+            publisherId = "com.apple",
+            supportedPlatforms = { iphone=true }
+        },
+        ["plugin.json"] = {
+            publisherId = "com.coronalabs"
+        }
+    },
+    
+    excludeFiles = {
+        all = { "*.md", "*.txt" },
+        android = { "Icon*.png", "*@2x.png", "*@4x.png" },
+        iphone = { "Icon-*.png", "*-ldpi.png", "*-mdpi.png", "*-hdpi.png", "*-xhdpi.png", "*-xxhdpi.png", "*-xxxhdpi.png" },
+    },
+}
