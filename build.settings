@@ -1,0 +1,32 @@
+-- build.settings — Solar2D build configuration
+-- Fun Run 1 Rebuilt
+
+settings = {
+    orientation = {
+        default = "landscapeRight",
+        supported = { "landscapeLeft", "landscapeRight" },
+    },
+    android = {
+        usesPermissions = {
+            "android.permission.INTERNET",
+            "android.permission.ACCESS_NETWORK_STATE",
+        },
+        versionCode = "1",
+    },
+    iphone = {
+        plist = {
+            UIStatusBarHidden = true,
+            UIPrerenderedIcon = true,
+            CFBundleIconFiles = {
+                "Icon.png",
+                "Icon@2x.png",
+                "Icon-72.png",
+                "Icon-72@2x.png",
+            },
+        },
+    },
+    plugins = {},
+    excludeFiles = {
+        all = { "*.md", "*.txt", "*.json", "progress.txt", "architecture.md", "tasks.json" },
+    },
+}
