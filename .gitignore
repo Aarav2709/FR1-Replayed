@@ -3,3 +3,6 @@ DecompiledCode
 
 # Ignore the original game files?!
 OriginalGame
+
+# Ignore some extra apks.
+Patcher

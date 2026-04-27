@@ -1,9 +1,5 @@
 -- main.lua — Fun Run 1 Rebuilt Entry Point
 -- Reconstructed from decompiled main.lu.lua
-
----------------------------------------------------------------------------------
--- System setup
----------------------------------------------------------------------------------
 display.setStatusBar(display.HiddenStatusBar)
 system.setIdleTimer(false)
 
@@ -11,33 +7,23 @@ system.setIdleTimer(false)
 isAndroid = ("Android" == system.getInfo("platformName"))
 isSimulator = ("simulator" == system.getInfo("environment"))
 
----------------------------------------------------------------------------------
--- Physics collision filters
----------------------------------------------------------------------------------
 localPlayerCollisionFilter  = { categoryBits = 1,  maskBits = 10 }
 remotePlayerCollisionFilter = { categoryBits = 16, maskBits = 2  }
 obstacleFilter              = { categoryBits = 2,  maskBits = 21 }
 powerUpFilter               = { categoryBits = 4,  maskBits = 2  }
 sensorFilter                = { categoryBits = 8,  maskBits = 1  }
 
----------------------------------------------------------------------------------
--- Font
----------------------------------------------------------------------------------
 local fontName = "Brady Bunch Remastered"
 if isAndroid or isSimulator then
     fontName = "BradyBunchRemastered"
 end
 
----------------------------------------------------------------------------------
--- Audio session (iOS)
----------------------------------------------------------------------------------
+
 if audio.supportsSessionProperty == true then
     audio.setSessionProperty(audio.MixMode, audio.AmbientMixMode)
 end
 
----------------------------------------------------------------------------------
--- Core module loading
----------------------------------------------------------------------------------
+
 local storyboard = require("modules.storyboard")
 require("modules.configuration")
 local database = require("modules.database")
@@ -45,9 +31,6 @@ local database = require("modules.database")
 storyboard.database = database
 storyboard.gamesPlayed = 0
 
----------------------------------------------------------------------------------
--- System event handlers
----------------------------------------------------------------------------------
 
 local function disposeGameSounds()
     if storyboard.gameDataTable and storyboard.gameDataTable.sounds then
@@ -190,10 +173,6 @@ Runtime:addEventListener("system", onSystemEvent)
 if isAndroid then
     Runtime:addEventListener("unhandledError", onUnhandledError)
 end
-
----------------------------------------------------------------------------------
--- Initialize game
----------------------------------------------------------------------------------
 
 local function initializeGame()
     -- Setup database
