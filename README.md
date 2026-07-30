@@ -1,14 +1,14 @@
 #  Fun Run 1: Replayed
 This is a fully reimagined version of Fun Run 1, built from the ground up in the original engine, [Solar2D (formerly Corona SDK)](https://solar2d.com/). The goal is to bring back the chaotic fun of the original with modern enhancements, while staying faithful to its roots.
 
-Whether you're here to relive the nostalgia or contribute to a fan-driven revival — welcome aboard!
+Whether you're here to relive the nostalgia or contribute to a fan-driven revival, welcome aboard!
 
 ##  Features (Planned & Implemented)
-*  Classic side-scrolling multiplayer racing
+*  Classic side scrolling multiplayer racing
 *  Rewritten core mechanics for smoother gameplay
 *  Enhanced visuals, animations, and character customization
 *  Online multiplayer using Solar2D plugins / custom netcode
-*  Power-ups, traps, and weapons — rebalanced and reworked
+*  Power-ups, traps, and weapons, rebalanced and reworked
 *  Ranked races, achievements, and leaderboards
 *  Modular code structure for modding and expansion
 
@@ -18,4 +18,4 @@ Whether you're here to relive the nostalgia or contribute to a fan-driven reviva
 * Lua + Solar2D APIs for physics, networking, and rendering
 
 ##  Disclaimer
-This is a fan-made project and is not affiliated with or endorsed by Dirtybit or the creators of Fun Run. All original assets are either recreated or used under fair use guidelines.
+This is a fan made project and is not affiliated with or endorsed by Dirtybit or the creators of Fun Run. All original assets are either recreated or used under fair use guidelines.
