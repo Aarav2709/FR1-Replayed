@@ -1,6 +1,7 @@
 -- quick play lobby with map voting.
 
 local storyboard = require("modules.storyboard")
+local adaptiveUI = require("modules.adaptiveUI")
 local gui = require("modules.gui")
 local createSprite = require("modules.createSprite")
 local mapInfo = require("modules.mapInfo")
@@ -33,9 +34,7 @@ function scene:createScene()
   background.x = display.contentWidth * 0.5
   background.y = display.contentHeight * 0.5
   view:insert(background)
-  quickPlayBackground = display.newImageRect("images/gui/background/quickPlay.png", 480, 320)
-  quickPlayBackground.x = display.contentWidth * 0.5
-  quickPlayBackground.y = display.contentHeight * 0.5
+  quickPlayBackground = adaptiveUI.newSidebarBackground("images/gui/background/quickPlay.png")
   quickPlayBackground.alpha = 0
   view:insert(quickPlayBackground)
 
@@ -43,7 +42,7 @@ function scene:createScene()
   voteTitle:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
   voteTitle.xScale, voteTitle.yScale = 0.5, 0.5
   voteTitle.alpha = 0
-  voteTitle.x = display.contentWidth * 0.11
+  voteTitle.x = 53
   voteTitle.y = display.contentHeight * 0.05
   view:insert(voteTitle)
 

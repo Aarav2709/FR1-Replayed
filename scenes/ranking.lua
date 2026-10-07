@@ -352,7 +352,7 @@ function scene:createScene()
     end
   end
 
-  local background = display.newImageRect("images/gui/background/background_ranking.png", 480, 320)
+  local background = display.newImageRect("images/gui/background/login.png", 480, 320)
   background.x = display.contentWidth * 0.5
   background.y = display.contentHeight * 0.5
   view:insert(background)

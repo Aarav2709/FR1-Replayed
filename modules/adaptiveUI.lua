@@ -15,6 +15,21 @@ function adaptiveUI.coverPoint(x, y)
   return display.contentCenterX + (x - DESIGN_WIDTH * 0.5) * scale, display.contentCenterY + (y - DESIGN_HEIGHT * 0.5) * scale
 end
 
+function adaptiveUI.newSidebarBackground(path)
+  local group = display.newGroup()
+  local sheet = graphics.newImageSheet(path, {
+    frames = { { x = 0, y = 0, width = 216, height = 640 }, { x = 216, y = 0, width = 744, height = 640 } },
+    sheetContentWidth = 960, sheetContentHeight = 640,
+  })
+  local wall = display.newImageRect(group, sheet, 1, 108, DESIGN_HEIGHT)
+  wall.anchorX, wall.anchorY = 0, 0
+  local sky = display.newImageRect(group, sheet, 2, display.contentWidth - 108, DESIGN_HEIGHT)
+  sky.anchorX, sky.anchorY = 0, 0
+  sky.x = 108
+  group.y = (display.contentHeight - DESIGN_HEIGHT) * 0.5
+  return group
+end
+
 function display.newImageRect(...)
   local args = { ... }
   local image = newImageRect(...)

@@ -1,6 +1,7 @@
 -- lan lobby. players, map choice and start.
 
 local storyboard = require("modules.storyboard")
+local adaptiveUI = require("modules.adaptiveUI")
 local gui = require("modules.gui")
 local mapInfo = require("modules.mapInfo")
 local createSprite = require("modules.createSprite")
@@ -37,9 +38,7 @@ function scene:createScene()
   background.x = display.contentWidth * 0.5
   background.y = display.contentHeight * 0.5
   view:insert(background)
-  local lobbyBackground = display.newImageRect("images/gui/background/lobbyCustomPlay.png", 480, 320)
-  lobbyBackground.x = display.contentWidth * 0.5
-  lobbyBackground.y = display.contentHeight * 0.5
+  local lobbyBackground = adaptiveUI.newSidebarBackground("images/gui/background/lobbyCustomPlay.png")
   view:insert(lobbyBackground)
 
   for i = 1, 4 do
