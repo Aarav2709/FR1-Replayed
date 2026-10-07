@@ -1,244 +1,304 @@
--- tableView.lua — Scrollable table/list view module
--- Provides a scrollable list widget for settings, friends, rankings, etc.
+-- vertical list.
 
-local storyboard = require("modules.storyboard")
+local M = {}
 
-local tableView = {}
+local screenHeight = display.contentHeight
+local marginX = display.contentWidth - display.viewableContentWidth
 
---------------------------------------------------------------------------------
--- newTableView(params)
--- Creates a scrollable table view
--- params:
---   x, y           : position
---   width, height   : dimensions
---   rowHeight       : height of each row (default 40)
---   rows            : array of row data tables
---   onRowRender     : function(event) called to render each row
---   onRowTouch      : function(event) called when a row is tapped
---   displayGroup    : optional parent group
---   backgroundColor : optional {r,g,b,a} background color
---------------------------------------------------------------------------------
-function tableView.newTableView(params)
-    params = params or {}
+local activeList
+local velocity = 0
+local defaultImage, overImage
+local highlightStart = 0
+local lastScrollTime, lastTrackTime = 0, 0
+local previousY
+local startY, lastY
+local delta = 0
+local currentY = -10
+local scrolled = false
 
-    local x = params.x or display.contentCenterX
-    local y = params.y or display.contentCenterY
-    local width = params.width or 300
-    local height = params.height or 200
-    local rowHeight = params.rowHeight or 40
-    local rows = params.rows or {}
-    local onRowRender = params.onRowRender
-    local onRowTouch = params.onRowTouch
-    local bgColor = params.backgroundColor or { 0, 0, 0, 0.2 }
-    local displayGroup = params.displayGroup
+local function showHighlight()
+  if system.getTimer() - highlightStart > 100 then
+    defaultImage.isVisible = false
+    overImage.isVisible = true
+    Runtime:removeEventListener("enterFrame", showHighlight)
+  end
+end
+M.showHighlight = showHighlight
 
-    -- Container group
-    local container = display.newGroup()
-    container.x = x
-    container.y = y
+local function trackVelocity(event)
+  local elapsed = event.time - lastTrackTime
+  if elapsed == 0 then
+    elapsed = 10
+  end
+  lastTrackTime = lastTrackTime + elapsed
+  if previousY then
+    velocity = (activeList.y - previousY) / elapsed
+  end
+  previousY = activeList.y
+end
+M.trackVelocity = trackVelocity
 
-    -- Background
-    local bg = display.newRect(container, 0, 0, width, height)
-    bg:setFillColor(bgColor[1] or 0, bgColor[2] or 0, bgColor[3] or 0, bgColor[4] or 0.2)
-
-    -- Scroll view using a simple group + masking approach
-    local scrollGroup = display.newGroup()
-    container:insert(scrollGroup)
-
-    -- Content group inside scrollGroup
-    local contentGroup = display.newGroup()
-    scrollGroup:insert(contentGroup)
-
-    -- Render rows
-    local totalContentHeight = 0
-    for i, rowData in ipairs(rows) do
-        local rowGroup = display.newGroup()
-        rowGroup.y = (i - 1) * rowHeight - (height / 2) + (rowHeight / 2)
-        contentGroup:insert(rowGroup)
-
-        -- Row background
-        local rowBg = display.newRect(rowGroup, 0, 0, width, rowHeight)
-        rowBg:setFillColor(0, 0, 0, 0)
-
-        -- Callback for custom row rendering
-        if onRowRender then
-            onRowRender({
-                row = rowGroup,
-                index = i,
-                data = rowData,
-                width = width,
-                height = rowHeight,
-            })
-        end
-
-        -- Touch handling
-        if onRowTouch then
-            rowBg:addEventListener("touch", function(event)
-                if event.phase == "ended" then
-                    onRowTouch({
-                        index = i,
-                        data = rowData,
-                        target = rowGroup,
-                    })
-                end
-                return true
-            end)
-        end
-
-        totalContentHeight = i * rowHeight
+function M.in_table(value, list)
+  for _, entry in pairs(list) do
+    if entry == value then
+      return true
     end
-
-    -- Simple drag-to-scroll
-    local scrollOffset = 0
-    local maxScroll = math.max(0, totalContentHeight - height)
-
-    bg:addEventListener("touch", function(event)
-        if event.phase == "began" then
-            display.getCurrentStage():setFocus(event.target)
-            event.target._startY = event.y
-            event.target._startOffset = scrollOffset
-        elseif event.phase == "moved" then
-            local dy = event.y - event.target._startY
-            scrollOffset = event.target._startOffset - dy
-            scrollOffset = math.max(0, math.min(scrollOffset, maxScroll))
-            contentGroup.y = -scrollOffset
-        elseif event.phase == "ended" or event.phase == "cancelled" then
-            display.getCurrentStage():setFocus(nil)
-        end
-        return true
-    end)
-
-    if displayGroup then
-        displayGroup:insert(container)
-    end
-
-    -- Public methods
-    container.scrollToTop = function()
-        scrollOffset = 0
-        contentGroup.y = 0
-    end
-
-    container.scrollToBottom = function()
-        scrollOffset = maxScroll
-        contentGroup.y = -maxScroll
-    end
-
-    container.getContentHeight = function()
-        return totalContentHeight
-    end
-
-    return container
+  end
+  return false
 end
 
---------------------------------------------------------------------------------
--- newList(params)
--- Legacy Corona-style list API used by settings credits, friends lists, etc.
--- params:
---   data      : array of item tables
---   default   : default row image path (used as row bg if provided)
---   width     : row width
---   height    : row height per item
---   onRelease : callback when list touched
---   top       : top padding
---   bottom    : bottom boundary (total visible height)
---   callback  : function(item) → returns a display group for the row
---------------------------------------------------------------------------------
-function tableView.newList(params)
-    params = params or {}
-    local data       = params.data or {}
-    local rowWidth   = params.width or 200
-    local rowHeight  = params.height or 28
-    local callback   = params.callback
-    local onRelease  = params.onRelease
-    local topPad     = params.top or 0
-    local bottom     = params.bottom or 200
+local function scrollList(event)
+  local FRICTION = 0.9
+  local elapsed = event.time - lastScrollTime
+  lastScrollTime = lastScrollTime + elapsed
+  if math.abs(velocity) < 0.01 then
+    velocity = 0
+    Runtime:removeEventListener("enterFrame", scrollList)
+  end
+  velocity = velocity * FRICTION
+  activeList.y = math.floor(activeList.y + velocity * elapsed)
+  local upperLimit = activeList.top
+  local lowerLimit = screenHeight - activeList.height - activeList.bottom
+  currentY = activeList.y
+  if activeList.y > upperLimit then
+    velocity = 0
+    Runtime:removeEventListener("enterFrame", scrollList)
+    activeList.tween = transition.to(activeList, { time = 400, y = upperLimit, transition = easing.outQuad })
+    currentY = upperLimit
+  elseif activeList.y < lowerLimit and lowerLimit < 0 then
+    velocity = 0
+    Runtime:removeEventListener("enterFrame", scrollList)
+    activeList.tween = transition.to(activeList, { time = 400, y = lowerLimit, transition = easing.outQuad })
+    currentY = lowerLimit
+  elseif activeList.y < lowerLimit then
+    velocity = 0
+    Runtime:removeEventListener("enterFrame", scrollList)
+    activeList.tween = transition.to(activeList, { time = 400, y = upperLimit, transition = easing.outQuad })
+    currentY = upperLimit
+  end
+  scrolled = true
+  return true
+end
+M.scrollList = scrollList
 
-    -- Container group (this is what gets :insert()-ed into the scene view)
-    local container = display.newGroup()
+local function newListItemHandler(self, event)
+  local list = activeList
+  local phase = event.phase
+  local default, over = self.default, self.over
+  local upperLimit = self.top
+  local lowerLimit = screenHeight - activeList.height - self.bottom
+  local result = true
 
-    -- Content group holds all rendered rows
-    local contentGroup = display.newGroup()
-    container:insert(contentGroup)
-
-    -- Render each data item
-    local totalContentHeight = 0
-    for i, item in ipairs(data) do
-        local rowGroup
-        if callback then
-            rowGroup = callback(item)
-        else
-            rowGroup = display.newGroup()
-        end
-        if rowGroup then
-            rowGroup.y = topPad + (i - 1) * rowHeight
-            contentGroup:insert(rowGroup)
-        end
-        totalContentHeight = topPad + i * rowHeight
+  if phase == "began" then
+    if event.y > 50 then
+      display.getCurrentStage():setFocus(self)
+      self.isFocus = true
+      startY = event.y
+      lastY = event.y
+      velocity = 0
+      delta = 0
+      if activeList.tween then
+        transition.cancel(activeList.tween)
+      end
+      Runtime:removeEventListener("enterFrame", scrollList)
+      Runtime:removeEventListener("enterFrame", trackVelocity)
+      Runtime:addEventListener("enterFrame", trackVelocity)
+      if over then
+        defaultImage = default
+        overImage = over
+        highlightStart = system.getTimer()
+        Runtime:addEventListener("enterFrame", showHighlight)
+      end
     end
-
-    -- Track content height on container for auto-scroll calculations
-    container.height = totalContentHeight
-
-    -- Internal scroll state
-    local scrollY = 0
-    local scrollTransition = nil
-
-    -- Public method: getY — returns current scroll offset
-    function container:getY()
-        return contentGroup.y
+  elseif self.isFocus then
+    if phase == "moved" then
+      Runtime:removeEventListener("enterFrame", showHighlight)
+      if over then
+        default.isVisible = true
+        over.isVisible = false
+      end
+      delta = event.y - lastY
+      lastY = event.y
+      if list.y > upperLimit or list.y < lowerLimit then
+        list.y = list.y + delta / 2
+      else
+        list.y = list.y + delta
+      end
+    elseif phase == "ended" or phase == "cancelled" then
+      lastScrollTime = event.time
+      local moved = event.y - startY
+      Runtime:removeEventListener("enterFrame", trackVelocity)
+      Runtime:addEventListener("enterFrame", scrollList)
+      if event.x >= self.stageBounds.xMin and moved < 10 and moved > -10 then
+        velocity = 0
+        result = self.onRelease(event)
+      end
+      display.getCurrentStage():setFocus(nil)
+      self.isFocus = false
+      if over then
+        default.isVisible = true
+        over.isVisible = false
+        Runtime:removeEventListener("enterFrame", showHighlight)
+      end
     end
+  end
+  return result
+end
+M.newListItemHandler = newListItemHandler
 
-    -- Public method: scrollTo — animate content to targetY over duration ms
-    function container:scrollTo(targetY, duration)
-        if scrollTransition then
-            transition.cancel(scrollTransition)
-            scrollTransition = nil
-        end
-        scrollTransition = transition.to(contentGroup, {
-            y = targetY,
-            time = duration or 1000,
-            onComplete = function()
-                scrollY = contentGroup.y
-                scrollTransition = nil
-            end
-        })
+local function newListItem(params)
+  local width, height = params.width, params.height
+  local item = display.newGroup()
+  if params.default then
+    local default = display.newImageRect(params.default, width, height)
+    item:insert(default)
+    default.x = default.width * 0.5 - marginX
+    default.y = 25
+    item.default = default
+  end
+  if params.over then
+    local over = display.newImageRect(params.over, width, height)
+    over.isVisible = false
+    item:insert(over)
+    over.x = over.width * 0.5 - marginX
+    item.over = over
+  end
+  item.id = params.id
+  item.data = params.data
+  item.onRelease = params.onRelease
+  item.top = params.top
+  item.bottom = params.bottom
+  local content = params.callback(params.data)
+  item.t = content
+  item:insert(content)
+  item.touch = newListItemHandler
+  item:addEventListener("touch", item)
+  return item
+end
+M.newListItem = newListItem
+
+function M.newList(params)
+  local data = params.data
+  local top = params.top or 20
+  local bottom = params.bottom or 48
+  local callback = params.callback or function() return {} end
+  local cells = {}
+  local list = display.newGroup()
+  local lastCellY, lastCellHeight = 0, 0
+
+  local function addCell(index, event)
+    if data[index] == nil then
+      if event then
+        timer.cancel(event.source)
+      end
+      return
     end
+    local cell = newListItem({
+      data = data[index], default = params.default, over = params.over, onRelease = params.onRelease,
+      top = top, bottom = bottom, callback = callback, id = index,
+      height = params.height, width = params.width,
+    })
+    list:insert(1, cell)
+    cell.x = marginX * 0.5
+    cell.y = lastCellY + lastCellHeight
+    lastCellY = cell.y
+    lastCellHeight = cell.height
+    cells[index] = cell
+  end
 
-    -- Public method: cleanUp — remove everything
-    function container:cleanUp()
-        if scrollTransition then
-            transition.cancel(scrollTransition)
-            scrollTransition = nil
+  local FIRST_CELLS = 15
+  local firstCount = math.min(FIRST_CELLS, #data)
+  local remaining = #data - firstCount
+  for i = 1, firstCount do
+    addCell(i)
+  end
+  local nextIndex = firstCount + 1
+  local addTimer
+  if remaining > 0 then
+    addTimer = timer.performWithDelay(50, function(event)
+      addCell(nextIndex, event)
+      nextIndex = nextIndex + 1
+    end, remaining)
+  end
+
+  list.y = top
+  list.top = top
+  list.bottom = bottom
+  list.c = {}
+  activeList = list
+  M.deleteingCell = false
+  local deleteQueue = {}
+  local onDeleted
+
+  function list.getCells()
+    return cells
+  end
+
+  function list:removeItem(id)
+    if M.deleteingCell then
+      deleteQueue[#deleteQueue + 1] = id
+    elseif cells then
+      M.deleteingCell = true
+      local index
+      for i = 1, #cells do
+        if cells[i] and cells[i].id == id then
+          index = i
+          break
         end
-        container:removeSelf()
+      end
+      if index then
+        display.remove(table.remove(cells, index))
+        for i = index, #cells do
+          if cells[i] then
+            cells[i].y = cells[i].y - cells[i].height
+          end
+        end
+      end
+      timer.performWithDelay(200, onDeleted, 1)
     end
+  end
 
-    -- Simple drag-to-scroll on the content area
-    local maxScroll = math.max(0, totalContentHeight - bottom)
-    container:addEventListener("touch", function(event)
-        if event.phase == "began" then
-            -- Stop any ongoing auto-scroll
-            if scrollTransition then
-                transition.cancel(scrollTransition)
-                scrollTransition = nil
-            end
-            display.getCurrentStage():setFocus(event.target)
-            event.target._startY = event.y
-            event.target._startOffset = contentGroup.y
-            if onRelease then onRelease(event) end
-        elseif event.phase == "moved" then
-            local dy = event.y - event.target._startY
-            local newY = event.target._startOffset + dy
-            newY = math.min(topPad, math.max(-maxScroll, newY))
-            contentGroup.y = newY
-        elseif event.phase == "ended" or event.phase == "cancelled" then
-            display.getCurrentStage():setFocus(nil)
-            scrollY = contentGroup.y
-        end
-        return true
-    end)
+  function onDeleted()
+    M.deleteingCell = false
+    if #deleteQueue > 0 then
+      list:removeItem(table.remove(deleteQueue, 1))
+    end
+  end
 
-    return container
+  function list:cleanUp()
+    Runtime:removeEventListener("enterFrame", scrollList)
+    Runtime:removeEventListener("enterFrame", showHighlight)
+    Runtime:removeEventListener("enterFrame", trackVelocity)
+    if addTimer then
+      timer.cancel(addTimer)
+      addTimer = nil
+    end
+    cells = nil
+    for i = list.numChildren, 1, -1 do
+      list:remove(i)
+    end
+    currentY = -10
+  end
+
+  function list:scrollTo(y, time)
+    velocity = 0
+    Runtime:removeEventListener("enterFrame", scrollList)
+    self.tween = transition.to(self, { time = time or 400, y = y or 0 })
+  end
+
+  function list:getY()
+    return currentY
+  end
+
+  function list:hasScrolled()
+    if scrolled then
+      scrolled = false
+      return true
+    end
+    return false
+  end
+
+  return list
 end
 
-return tableView
+return M

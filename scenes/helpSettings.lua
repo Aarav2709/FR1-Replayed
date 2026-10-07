@@ -1,171 +1,105 @@
----------------------------------------------------------------------------------
--- helpSettings.lua — Help / about overlay
----------------------------------------------------------------------------------
+-- help overlay.
+
 local storyboard = require("modules.storyboard")
+local gui = require("modules.gui")
+
 local scene = storyboard.newScene()
 
--- Module-level variables
-local backButton
-local keyListener
-local background
-local enterFrameListener
+local panel, closeButton, tutorialButton
+local removeListeners, onFrame, onKey
 
----------------------------------------------------------------------------------
--- CREATE SCENE
----------------------------------------------------------------------------------
-function scene:createScene(event)
-    local view = self.view
-    local gui = require("modules.gui")
-    local font = storyboard.gameDataTable.font
-    local fontSize = storyboard.localized.getFontSize()
-    local textColor = {1, 1, 1, 1}
+function scene:createScene()
+  local view = self.view
+  panel = display.newGroup()
 
-    ---------------------------------------------------------------------------
-    -- Background
-    ---------------------------------------------------------------------------
-    background = display.newImageRect("images/gui/background/login.png",
-        display.contentWidth, display.contentHeight)
-    background.x = display.contentCenterX
-    background.y = display.contentCenterY
-    view:insert(background)
+  local dim = display.newRect(0, 0, display.contentWidth, display.contentHeight)
+  dim:setFillColor(0, 0, 0, 0.5882352941176471)
+  dim.x = display.contentWidth * 0.5
+  dim.y = display.contentHeight * 0.5
+  view:insert(dim)
+  local wall = display.newImageRect("images/gui/background/settingsWall2.png", 282, 103)
+  panel:insert(wall)
 
-    ---------------------------------------------------------------------------
-    -- Settings tab bar
-    ---------------------------------------------------------------------------
-    local settingsModule = require("modules.settingsModule")
-    local settingsBar = settingsModule.create()
-    if settingsBar and settingsBar.displayGroup then
-        view:insert(settingsBar.displayGroup)
+  tutorialButton = gui.newButton({
+    image = "images/gui/button/blank.png",
+    text = { string = storyboard.localized.get("Tutorial"), size = 16, languageSizes = { fr = 20, es = 19, ja = 17, ko = 18 } },
+    width = 75, height = 50, x = 0, y = 0, displayGroup = panel,
+    onRelease = function()
+      storyboard.gotoScene("scenes.tutorial")
+      storyboard.purgeScene("scenes.settings")
+    end,
+  })
+
+  local function onPanelTouch()
+    return true
+  end
+  local function onDimTouch(event)
+    if event.phase == "ended" then
+      storyboard.hideOverlay()
     end
+    return true
+  end
 
-    ---------------------------------------------------------------------------
-    -- Title
-    ---------------------------------------------------------------------------
-    local titleText = display.newText({
-        text = storyboard.localized.get("Help") or "Help",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.12,
-        font = font,
-        fontSize = fontSize * 2,
-    })
-    titleText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(titleText)
+  closeButton = gui.newButton({
+    image = "images/gui/button/exit.png", width = 20, height = 19,
+    onRelease = function() storyboard.hideOverlay() end,
+    x = 125, y = -35, displayGroup = panel,
+  })
 
-    ---------------------------------------------------------------------------
-    -- About / version info
-    ---------------------------------------------------------------------------
-    local versionText = display.newText({
-        text = "Fun Run — Replayed",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.28,
-        font = font,
-        fontSize = fontSize,
-    })
-    versionText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(versionText)
+  function removeListeners()
+    tutorialButton.removeListener()
+    dim:removeEventListener("touch", onDimTouch)
+    wall:removeEventListener("touch", onPanelTouch)
+  end
 
-    local versionNumber = display.newText({
-        text = (storyboard.localized.get("Version") or "Version") .. ": " ..
-               (storyboard.gameDataTable.version or "1.0"),
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.34,
-        font = font,
-        fontSize = fontSize * 0.85,
-    })
-    versionNumber:setFillColor(textColor[1], textColor[2], textColor[3], 0.7)
-    view:insert(versionNumber)
-
-    ---------------------------------------------------------------------------
-    -- Tutorial button
-    ---------------------------------------------------------------------------
-    local function onTutorialTap(event)
-        storyboard.gotoScene("scenes.tutorial")
-        return true
-    end
-
-    local tutorialButton = gui.newButton({
-        image = "images/gui/button/blank.png",
-        text = storyboard.localized.get("Tutorial") or "Tutorial",
-        width = 150, height = 40,
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.48,
-        onRelease = onTutorialTap,
-    })
-    view:insert(tutorialButton.displayGroup or tutorialButton)
-
-    ---------------------------------------------------------------------------
-    -- Credits
-    ---------------------------------------------------------------------------
-    local creditsText = display.newText({
-        text = storyboard.localized.get("Credits") or "Credits",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.62,
-        font = font,
-        fontSize = fontSize,
-    })
-    creditsText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(creditsText)
-
-    local creditsBody = display.newText({
-        text = "dirtybit",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.68,
-        font = font,
-        fontSize = fontSize * 0.85,
-    })
-    creditsBody:setFillColor(textColor[1], textColor[2], textColor[3], 0.7)
-    view:insert(creditsBody)
-
-    ---------------------------------------------------------------------------
-    -- Back button
-    ---------------------------------------------------------------------------
-    local function onBackTap(event)
-        storyboard.gotoScene("scenes.settings")
-        storyboard.purgeScene("scenes.helpSettings")
-        return true
-    end
-
-    backButton = gui.newButton({
-        image = "images/gui/button/smallHome.png",
-        width = 35, height = 35,
-        x = 26, y = 26,
-        onRelease = onBackTap,
-    })
-    view:insert(backButton.displayGroup or backButton)
-
-    ---------------------------------------------------------------------------
-    -- Key listener (Android back)
-    ---------------------------------------------------------------------------
-    keyListener = function(event)
-        if event.keyName == "back" and event.phase == "up" then
-            onBackTap(event)
-            return true
-        end
-    end
-    Runtime:addEventListener("key", keyListener)
+  dim:addEventListener("touch", onDimTouch)
+  wall:addEventListener("touch", onPanelTouch)
+  view:insert(panel)
+  panel.x = display.contentWidth * 0.5
+  panel.y = display.contentHeight * 0.5
 end
 
----------------------------------------------------------------------------------
--- ENTER SCENE
----------------------------------------------------------------------------------
-function scene:enterScene(event)
+function scene:enterScene()
+  local backKeyEnabled, backPressed = false, false
+
+  function onFrame()
+    if backPressed then
+      backPressed = false
+      backKeyEnabled = false
+      storyboard.hideOverlay()
+    end
+  end
+
+  function onKey(event)
+    if event.phase == "up" and event.keyName == "back" then
+      if backKeyEnabled then
+        backPressed = true
+      end
+      return true
+    end
+    return false
+  end
+
+  timer.performWithDelay(200, function()
+    if tutorialButton then
+      backKeyEnabled = true
+      closeButton.addListener()
+      tutorialButton.addListener()
+    end
+  end, 1)
+  Runtime:addEventListener("key", onKey)
+  Runtime:addEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- EXIT SCENE
----------------------------------------------------------------------------------
-function scene:exitScene(event)
-    Runtime:removeEventListener("key", keyListener)
+function scene:exitScene()
+  Runtime:removeEventListener("key", onKey)
+  Runtime:removeEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- DESTROY SCENE
----------------------------------------------------------------------------------
-function scene:destroyScene(event)
-    background = nil
-    backButton = nil
-    enterFrameListener = nil
-    keyListener = nil
+function scene:destroyScene()
+  removeListeners()
+  closeButton.removeListener()
+  closeButton, panel, tutorialButton = nil, nil, nil
 end
 
 scene:addEventListener("createScene", scene)

@@ -1,60 +1,39 @@
--- loadingAnimation.lua — Loading/spinner animation utility module
--- Shows/hides a loading spinner overlay during async operations
-
-local storyboard = require("modules.storyboard")
+-- loading spinner.
 
 local loadingAnimation = {}
 
---------------------------------------------------------------------------------
--- newLoadingAnimation()
--- Creates a new loading spinner instance with its own display group.
--- Returns { displayGroup, startLoader(), stopLoader() }
---------------------------------------------------------------------------------
 function loadingAnimation.newLoadingAnimation()
-    local instance = {}
-    local spinning = false
-    local enterFrameRef = nil
+  local loader = { displayGroup = display.newGroup() }
+  loader.displayGroup.isVisible = false
+  loader.loadingAnimation = display.newImageRect("images/gui/loading/loader.png", 40, 40)
+  loader.displayGroup:insert(loader.loadingAnimation)
+  loader.displayGroup.x = display.contentWidth * 0.5
+  loader.displayGroup.y = display.contentHeight * 0.5
 
-    -- Create display group for the spinner
-    instance.displayGroup = display.newGroup()
-    instance.displayGroup.isVisible = false
-
-    -- Spinner circle
-    local circle = display.newCircle(instance.displayGroup, 0, 0, 12)
-    circle:setFillColor(0, 0, 0, 0)
-    circle:setStrokeColor(1, 1, 1, 0.9)
-    circle.strokeWidth = 2
-
-    -- Indicator dot on rim
-    local dot = display.newCircle(instance.displayGroup, 0, -12, 3)
-    dot:setFillColor(1, 1, 1)
-
-    -- Start spinning
-    function instance.startLoader()
-        if spinning then return end
-        spinning = true
-        instance.displayGroup.isVisible = true
-        local function spin()
-            if instance.displayGroup and instance.displayGroup.removeSelf then
-                instance.displayGroup.rotation = instance.displayGroup.rotation + 10
-            end
-        end
-        Runtime:addEventListener("enterFrame", spin)
-        enterFrameRef = spin
+  local function spin()
+    if loader.loadingAnimation then
+      loader.loadingAnimation:rotate(45)
     end
+  end
 
-    -- Stop spinning
-    function instance.stopLoader()
-        if not spinning then return end
-        spinning = false
-        instance.displayGroup.isVisible = false
-        if enterFrameRef then
-            Runtime:removeEventListener("enterFrame", enterFrameRef)
-            enterFrameRef = nil
-        end
+  function loader.startLoader()
+    loader.displayGroup.isVisible = true
+    if loader.rotateTimer then
+      timer.cancel(loader.rotateTimer)
+      loader.rotateTimer = nil
     end
+    loader.rotateTimer = timer.performWithDelay(100, spin, 0)
+  end
 
-    return instance
+  function loader.stopLoader()
+    if loader.rotateTimer then
+      loader.displayGroup.isVisible = false
+      timer.cancel(loader.rotateTimer)
+      loader.rotateTimer = nil
+    end
+  end
+
+  return loader
 end
 
 return loadingAnimation

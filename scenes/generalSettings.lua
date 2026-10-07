@@ -1,226 +1,187 @@
----------------------------------------------------------------------------------
--- generalSettings.lua — General settings overlay (sound, chat, notifications)
----------------------------------------------------------------------------------
+-- sound, notifications and language overlay.
+
 local storyboard = require("modules.storyboard")
+local gui = require("modules.gui")
+
 local scene = storyboard.newScene()
 
--- Module-level variables
-local backButton
-local keyListener
-local background
-local soundToggle
-local chatToggle
-local notificationToggle
-local enterFrameListener
+local panel, closeButton, notificationOffButton
+local removeListeners, onFrame, onKey
 
----------------------------------------------------------------------------------
--- CREATE SCENE
----------------------------------------------------------------------------------
-function scene:createScene(event)
-    local view = self.view
-    local gui = require("modules.gui")
-    local font = storyboard.gameDataTable.font
-    local fontSize = storyboard.localized.getFontSize()
-    local textColor = {1, 1, 1, 1}
+function scene:createScene()
+  local view = self.view
+  local font = storyboard.gameDataTable.font
+  local soundOn, soundOff, notificationOn, languageButton
+  local SOUND_X, NOTIFICATION_X, LANGUAGE_X = -85, 0, 85
+  panel = display.newGroup()
 
-    ---------------------------------------------------------------------------
-    -- Background
-    ---------------------------------------------------------------------------
-    background = display.newImageRect("images/gui/background/login.png",
-        display.contentWidth, display.contentHeight)
-    background.x = display.contentCenterX
-    background.y = display.contentCenterY
-    view:insert(background)
+  local dim = display.newRect(0, 0, display.contentWidth, display.contentHeight)
+  dim:setFillColor(0, 0, 0, 0.5882352941176471)
+  dim.x = display.contentWidth * 0.5
+  dim.y = display.contentHeight * 0.5
+  view:insert(dim)
+  local wall = display.newImageRect("images/gui/background/settingsWall2.png", 282, 103)
+  panel:insert(wall)
+  panel:insert(display.newText(storyboard.localized.get("GeneralSettings"), 0, -35, font, 22))
 
-    ---------------------------------------------------------------------------
-    -- Settings tab bar
-    ---------------------------------------------------------------------------
-    local settingsModule = require("modules.settingsModule")
-    local settingsBar = settingsModule.create()
-    if settingsBar and settingsBar.displayGroup then
-        view:insert(settingsBar.displayGroup)
+  local function toggleSound()
+    if storyboard.database.getSound() == 1 then
+      storyboard.database.setSound(0)
+      soundOff.alpha = 1
+      soundOn.alpha = 0
+    else
+      storyboard.database.setSound(1)
+      soundOn.alpha = 1
+      soundOff.alpha = 0
     end
+  end
 
-    ---------------------------------------------------------------------------
-    -- Title
-    ---------------------------------------------------------------------------
-    local titleText = display.newText({
-        text = storyboard.localized.get("General") or "General",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.12,
-        font = font,
-        fontSize = fontSize * 2,
-    })
-    titleText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(titleText)
-
-    ---------------------------------------------------------------------------
-    -- Sound toggle
-    ---------------------------------------------------------------------------
-    local soundState = storyboard.database.getSound()
-
-    local soundLabel = display.newText({
-        text = storyboard.localized.get("Sound") or "Sound",
-        x = display.contentWidth * 0.3,
-        y = display.contentHeight * 0.3,
-        font = font,
-        fontSize = fontSize,
-    })
-    soundLabel:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(soundLabel)
-
-    local soundStatusText = display.newText({
-        text = (soundState == 1) and (storyboard.localized.get("On") or "On") or (storyboard.localized.get("Off") or "Off"),
-        x = display.contentWidth * 0.7,
-        y = display.contentHeight * 0.3,
-        font = font,
-        fontSize = fontSize,
-    })
-    soundStatusText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(soundStatusText)
-
-    local function onSoundToggle(event)
-        local s = storyboard.database.getSound()
-        if s == 1 then
-            storyboard.database.setSound(0)
-            soundStatusText.text = storyboard.localized.get("Off") or "Off"
-        else
-            storyboard.database.setSound(1)
-            soundStatusText.text = storyboard.localized.get("On") or "On"
-        end
-        return true
+  local function toggleNotifications()
+    if storyboard.database.getNotification() == 1 then
+      storyboard.database.setNotification(0)
+      notificationOffButton.alpha = 1
+      notificationOn.alpha = 0
+    else
+      storyboard.database.setNotification(1)
+      notificationOn.alpha = 1
+      notificationOffButton.alpha = 0
     end
-    soundStatusText:addEventListener("tap", onSoundToggle)
+  end
 
-    ---------------------------------------------------------------------------
-    -- Chat toggle
-    ---------------------------------------------------------------------------
-    local chatState = storyboard.database.getChat and storyboard.database.getChat() or 1
-
-    local chatLabel = display.newText({
-        text = storyboard.localized.get("Chat") or "Chat",
-        x = display.contentWidth * 0.3,
-        y = display.contentHeight * 0.42,
-        font = font,
-        fontSize = fontSize,
+  local function newToggle(image, x, width, height, onRelease)
+    return gui.newButton({
+      image = image, width = width or 50, height = height or 50, onRelease = onRelease, x = x, y = 5,
+      displayGroup = panel,
     })
-    chatLabel:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(chatLabel)
+  end
+  soundOn = newToggle("images/gui/button/mute.png", SOUND_X, nil, nil, toggleSound)
+  soundOff = newToggle("images/gui/button/unmute.png", SOUND_X, nil, nil, toggleSound)
+  notificationOn = newToggle("images/gui/button/notification.png", NOTIFICATION_X,
+    storyboard.gameDataTable.backButton[1], storyboard.gameDataTable.backButton[2], toggleNotifications)
+  notificationOffButton = newToggle("images/gui/button/notificationOff.png", NOTIFICATION_X,
+    storyboard.gameDataTable.backButton[1], storyboard.gameDataTable.backButton[2], toggleNotifications)
 
-    local chatStatusText = display.newText({
-        text = (chatState == 1) and (storyboard.localized.get("On") or "On") or (storyboard.localized.get("Off") or "Off"),
-        x = display.contentWidth * 0.7,
-        y = display.contentHeight * 0.42,
-        font = font,
-        fontSize = fontSize,
-    })
-    chatStatusText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(chatStatusText)
+  languageButton = gui.newButton({
+    image = "images/gui/button/blank.png",
+    text = {
+      string = storyboard.localized.get("Phone"), string2 = storyboard.localized.get("Language"), size = 16,
+      languageSizes = { fr = 20, es = 19, ja = 17, ko = 18 },
+    },
+    width = 75, height = 50, x = LANGUAGE_X, y = 5, displayGroup = panel,
+    onRelease = function()
+      if storyboard.database.usingPhoneLanguage() then
+        storyboard.database.usePhoneLanguage(false)
+        languageButton.getText().text = storyboard.localized.get("English")
+      else
+        storyboard.database.usePhoneLanguage(true)
+        languageButton.getText().text = storyboard.localized.get("Phone")
+        languageButton.getText().text2.text = storyboard.localized.get("Language")
+      end
+    end,
+  })
 
-    local function onChatToggle(event)
-        local c = storyboard.database.getChat and storyboard.database.getChat() or 1
-        if c == 1 then
-            if storyboard.database.setChat then storyboard.database.setChat(0) end
-            chatStatusText.text = storyboard.localized.get("Off") or "Off"
-        else
-            if storyboard.database.setChat then storyboard.database.setChat(1) end
-            chatStatusText.text = storyboard.localized.get("On") or "On"
-        end
-        return true
+  if storyboard.database.getSound() == 1 then
+    soundOff.alpha = 0
+  else
+    soundOn.alpha = 0
+  end
+  if storyboard.database.usingPhoneLanguage() then
+    languageButton.getText().text = storyboard.localized.get("Phone")
+    languageButton.getText().text2.text = storyboard.localized.get("Language")
+  else
+    languageButton.getText().text = storyboard.localized.get("English")
+  end
+  if storyboard.localized.language ~= "en" then
+    notificationOffButton.alpha = 0
+    notificationOn.alpha = 0
+  elseif storyboard.database.getNotification() == 1 then
+    notificationOffButton.alpha = 0
+  else
+    notificationOn.alpha = 0
+  end
+
+  local buttons = { soundOff, notificationOn, notificationOffButton, soundOn, languageButton }
+  function panel.addButtonListeners()
+    for _, button in ipairs(buttons) do
+      button.addListener()
     end
-    chatStatusText:addEventListener("tap", onChatToggle)
-
-    ---------------------------------------------------------------------------
-    -- Notification toggle
-    ---------------------------------------------------------------------------
-    local notifState = storyboard.database.getNotification and storyboard.database.getNotification() or 1
-
-    local notifLabel = display.newText({
-        text = storyboard.localized.get("Notifications") or "Notifications",
-        x = display.contentWidth * 0.3,
-        y = display.contentHeight * 0.54,
-        font = font,
-        fontSize = fontSize,
-    })
-    notifLabel:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(notifLabel)
-
-    local notifStatusText = display.newText({
-        text = (notifState == 1) and (storyboard.localized.get("On") or "On") or (storyboard.localized.get("Off") or "Off"),
-        x = display.contentWidth * 0.7,
-        y = display.contentHeight * 0.54,
-        font = font,
-        fontSize = fontSize,
-    })
-    notifStatusText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(notifStatusText)
-
-    local function onNotifToggle(event)
-        local n = storyboard.database.getNotification and storyboard.database.getNotification() or 1
-        if n == 1 then
-            if storyboard.database.setNotification then storyboard.database.setNotification(0) end
-            notifStatusText.text = storyboard.localized.get("Off") or "Off"
-        else
-            if storyboard.database.setNotification then storyboard.database.setNotification(1) end
-            notifStatusText.text = storyboard.localized.get("On") or "On"
-        end
-        return true
+  end
+  function panel.removeButtonListeners()
+    for _, button in ipairs(buttons) do
+      button.removeListener()
     end
-    notifStatusText:addEventListener("tap", onNotifToggle)
+  end
 
-    ---------------------------------------------------------------------------
-    -- Back button
-    ---------------------------------------------------------------------------
-    local function onBackTap(event)
-        storyboard.gotoScene("scenes.settings")
-        storyboard.purgeScene("scenes.generalSettings")
-        return true
+  local function onPanelTouch()
+    return true
+  end
+  local function onDimTouch(event)
+    if event.phase == "ended" then
+      storyboard.hideOverlay()
     end
+    return true
+  end
 
-    backButton = gui.newButton({
-        image = "images/gui/button/smallHome.png",
-        width = 35, height = 35,
-        x = 26, y = 26,
-        onRelease = onBackTap,
-    })
-    view:insert(backButton.displayGroup or backButton)
+  closeButton = gui.newButton({
+    image = "images/gui/button/exit.png", width = 20, height = 19,
+    onRelease = function() storyboard.hideOverlay() end,
+    x = 125, y = -35, displayGroup = panel,
+  })
 
-    ---------------------------------------------------------------------------
-    -- Key listener (Android back)
-    ---------------------------------------------------------------------------
-    keyListener = function(event)
-        if event.keyName == "back" and event.phase == "up" then
-            onBackTap(event)
-            return true
-        end
-    end
-    Runtime:addEventListener("key", keyListener)
+  function removeListeners()
+    panel.removeButtonListeners()
+    dim:removeEventListener("touch", onDimTouch)
+    wall:removeEventListener("touch", onPanelTouch)
+  end
+
+  dim:addEventListener("touch", onDimTouch)
+  wall:addEventListener("touch", onPanelTouch)
+  view:insert(panel)
+  panel.x = display.contentWidth * 0.5
+  panel.y = display.contentHeight * 0.5
 end
 
----------------------------------------------------------------------------------
--- ENTER SCENE
----------------------------------------------------------------------------------
-function scene:enterScene(event)
+function scene:enterScene()
+  local backKeyEnabled, backPressed = false, false
+
+  function onFrame()
+    if backPressed then
+      backPressed = false
+      backKeyEnabled = false
+      storyboard.hideOverlay()
+    end
+  end
+
+  function onKey(event)
+    if event.phase == "up" and event.keyName == "back" then
+      if backKeyEnabled then
+        backPressed = true
+      end
+      return true
+    end
+    return false
+  end
+
+  timer.performWithDelay(200, function()
+    if notificationOffButton then
+      backKeyEnabled = true
+      closeButton.addListener()
+      panel.addButtonListeners()
+    end
+  end, 1)
+  Runtime:addEventListener("key", onKey)
+  Runtime:addEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- EXIT SCENE
----------------------------------------------------------------------------------
-function scene:exitScene(event)
-    Runtime:removeEventListener("key", keyListener)
+function scene:exitScene()
+  Runtime:removeEventListener("key", onKey)
+  Runtime:removeEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- DESTROY SCENE
----------------------------------------------------------------------------------
-function scene:destroyScene(event)
-    background = nil
-    backButton = nil
-    soundToggle = nil
-    chatToggle = nil
-    notificationToggle = nil
-    enterFrameListener = nil
-    keyListener = nil
+function scene:destroyScene()
+  removeListeners()
+  closeButton.removeListener()
+  closeButton, panel, notificationOffButton = nil, nil, nil
 end
 
 scene:addEventListener("createScene", scene)

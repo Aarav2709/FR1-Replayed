@@ -1,805 +1,918 @@
----------------------------------------------------------------------------------
--- gamePlay.lua — Singleplayer practice race (playable)
--- Forest theme, procedurally generated flat course with obstacles
--- Physics-based player with jump controls + 3 AI bots
----------------------------------------------------------------------------------
+-- the race. local simulation, bots or lan players.
+
 local storyboard = require("modules.storyboard")
-local scene = storyboard.newScene()
 local physics = require("physics")
-local rewardedVideoModule = require("modules.rewardedVideoModule")
-local accessories = require("modules.accessories")
+local map = require("modules.map")
+local powerUps = require("modules.powerUps")
+local player = require("modules.player")
+local tutorialModule = require("modules.tutorialModule")
+local lan = require("modules.lan")
 
--- Constants
-local CELL_W = 80
-local CELL_H = 50
-local GRAVITY = 20
-local TOP_SPEED = 350
-local ACCELERATION = 30
-local JUMP_FORCE = -200
-local PLAYER_DENSITY = 1.27
-local PLAYER_FRICTION = 0
-local PLAYER_BOUNCE = 0.1
+local scene = storyboard.newScene()
 
--- Camera offset (player kept at ~1/3 from left, ~2/3 from top)
-local CAM_OFFSET_X = 150
-local CAM_OFFSET_Y = 204
+local skyGroup, cloudGroup, mountainGroup, nearGroup, gameGroup, foregroundGroup
+local selfArrow, ninjaArrow, homeButton, positionText, jumpHint, powerUpHint
+local jumpArea, jumpButton, powerUpArea, powerUpButton
+local countdownImage
+local placeNames
+local quitAlert
+local cleanUp
 
--- Course parameters
-local MAP_COLS = 120 -- 120 cells wide = 9600px
-local MAP_ROWS = 7   -- 7 cells tall = 350px
-local GROUND_ROW = 5 -- ground level row (0-indexed from top)
-local MAP_LENGTH = MAP_COLS * CELL_W
-local GOAL_X = MAP_LENGTH - CELL_W * 3
+local PLAYER_SCREEN_X, PLAYER_SCREEN_Y = 150, 204
+local PROGRESS_BAR_WIDTH = 340
+local PROGRESS_BAR_LEFT = (display.contentWidth - PROGRESS_BAR_WIDTH) * 0.5
+local FINISH_TIMEOUT = 30000
+local KILLING_POWER_UPS = { [1] = "blade", [2] = "trap", [3] = "lightning", [9] = "ninja" }
 
--- Module-level variables
-local backgroundGroup, gameGroup, foregroundGroup, playerGroup, effectGroup, uiGroup
-local skyImage, mountainImages, cloudImages
-local groundTiles = {}
-local player, playerBody, playerSprite
-local bots = {}
-local selfArrow, ninjaArrow, homeButton, timerText, statusText
-local countdownTimer, gameTimer, enterFrameListener, keyListener
-local isGameActive = false
-local isGameRunning = false
-local gameStartTime = 0
-local jumpButton, powerupButton
-local touchingJump = false
-local playerFinished = false
-local finishOrder = {}
-local positionLabels = { "1st", "2nd", "3rd", "4th" }
-
--- Theme images
-local THEME_DIR = "images/map/element/forest/"
-local BG_DIR = "images/map/background/forest/"
-local GROUND_TILES = { "1Av1.png", "1Av2.png", "1Av3.png", "1Av4.png" }
-
-local avatarNames = {}
-for _, item in ipairs(accessories.getAvatarList()) do
-  avatarNames[item.id] = item.image
-end
-
----------------------------------------------------------------------------------
--- HELPERS
----------------------------------------------------------------------------------
-local function getAvatarName(avatarId)
-  return avatarNames[avatarId] or "fox"
-end
-
-local function createPlayerBody(name, startX, startY, group)
-  local bodyPath = "images/game/avatar/" .. name .. "BodySprite.png"
-  local sprite = display.newImageRect(bodyPath, 64, 64)
-  if not sprite then
-    local thumbPath = "images/gui/market/accessories/" .. name .. ".png"
-    sprite = display.newImageRect(thumbPath, 64, 64)
-    if not sprite then
-      sprite = display.newRect(0, 0, 30, 30)
-      sprite:setFillColor(1, 0.5, 0)
-    end
-  end
-  sprite.xScale = 0.45
-  sprite.yScale = 0.45
-
-  -- Physics body: simplified box
-  local bodyGroup = display.newGroup()
-  bodyGroup:insert(sprite)
-  bodyGroup.x = startX
-  bodyGroup.y = startY
-  group:insert(bodyGroup)
-
-  physics.addBody(bodyGroup, "static", {
-    density = PLAYER_DENSITY,
-    friction = PLAYER_FRICTION,
-    bounce = PLAYER_BOUNCE,
-    box = { halfWidth = 12, halfHeight = 15 },
-  })
-
-  bodyGroup.isSleepingAllowed = false
-  bodyGroup.isFixedRotation = true
-  bodyGroup.onGround = false
-  bodyGroup.topSpeedX = TOP_SPEED
-  bodyGroup.accelerateX = ACCELERATION
-  bodyGroup.sprite = sprite
-  bodyGroup.username = ""
-  bodyGroup.goalTime = -1
-  bodyGroup.isBot = false
-  bodyGroup.lastJumpTime = 0
-
-  -- Ground detection collision
-  bodyGroup.collision = function(self, event)
-    if event.phase == "began" then
-      if event.other and event.other.mapElement then
-        self.onGround = true
-        self.groundTime = system.getTimer()
-      end
-    elseif event.phase == "ended" then
-      if event.other and event.other.mapElement then
-        -- Check if still on something
-        timer.performWithDelay(50, function()
-          if self and self.removeSelf then
-            local vx, vy = self:getLinearVelocity()
-            if vy > 2 then
-              self.onGround = false
-            end
-          end
-        end)
-      end
-    end
-  end
-  bodyGroup:addEventListener("collision", bodyGroup)
-
-  return bodyGroup
-end
-
-local function jumpPlayer(body)
-  if not body or not body.removeSelf then return end
-  if not body.getLinearVelocity then return end
-  if not body.onGround then return end
-
-  local now = system.getTimer()
-  if now - (body.lastJumpTime or 0) < 200 then return end
-  body.lastJumpTime = now
-
-  local vx, vy = body:getLinearVelocity()
-  body:setLinearVelocity(vx, 0)
-  body:applyForce(0, JUMP_FORCE, body.x, body.y)
-  body.onGround = false
-end
-
-local function acceleratePlayer(body, dt)
-  if not body or not body.removeSelf then return end
-  if not body.getLinearVelocity then return end
-  if body.goalTime > 0 then return end   -- finished
-
-  local vx, vy = body:getLinearVelocity()
-  local acc = body.accelerateX or ACCELERATION
-
-  -- Speed boost zones
-  if not body.onGround then
-    acc = acc * 0.4     -- less control in air
-  end
-
-  -- Below 20% speed: 4x boost
-  if math.abs(vx) < body.topSpeedX * 0.2 then
-    acc = acc * 4
-  elseif math.abs(vx) < body.topSpeedX * 0.5 then
-    acc = acc * 2
-  end
-
-  vx = vx + acc * (dt / 16.67)
-
-  -- Cap speed
-  if vx > body.topSpeedX then
-    vx = vx - 5
-  end
-
-  body:setLinearVelocity(vx, vy)
-end
-
----------------------------------------------------------------------------------
--- CREATE SCENE
----------------------------------------------------------------------------------
-function scene:createScene(event)
+function scene:createScene()
   local view = self.view
+  local screenRight = display.screenOriginX + display.actualContentWidth
   local font = storyboard.gameDataTable.font
-  local fontSize = 40
 
-  rewardedVideoModule.clearActiveVideoData()
   storyboard.gameDataTable.gameStats = nil
-
-  -- Start physics early so addBody works in createScene
-  physics.start()
-  physics.pause()   -- pause until countdown finishes
-  physics.setGravity(0, GRAVITY)
-
-  ---------------------------------------------------------------------------
-  -- Display groups (layered)
-  ---------------------------------------------------------------------------
-  backgroundGroup = display.newGroup()
-  view:insert(backgroundGroup)
-
+  skyGroup = display.newGroup()
+  view:insert(skyGroup)
+  cloudGroup = display.newGroup()
+  view:insert(cloudGroup)
+  mountainGroup = display.newGroup()
+  view:insert(mountainGroup)
+  nearGroup = display.newGroup()
+  view:insert(nearGroup)
   gameGroup = display.newGroup()
   view:insert(gameGroup)
-
   foregroundGroup = display.newGroup()
   view:insert(foregroundGroup)
 
-  playerGroup = display.newGroup()
-  view:insert(playerGroup)
-
-  effectGroup = display.newGroup()
-  view:insert(effectGroup)
-
-  uiGroup = display.newGroup()
-  view:insert(uiGroup)
-
-  ---------------------------------------------------------------------------
-  -- Sky background (repeating)
-  ---------------------------------------------------------------------------
-  for i = 0, math.ceil(MAP_LENGTH / 480) + 1 do
-    local sky = display.newImageRect(BG_DIR .. "bkg_sundown.png", 480, 360)
-    sky.anchorX = 0
-    sky.anchorY = 1
-    sky.x = i * 480
-    sky.y = GROUND_ROW * CELL_H + CELL_H + 60
-    backgroundGroup:insert(sky)
-  end
-
-  ---------------------------------------------------------------------------
-  -- Mountain parallax layer
-  ---------------------------------------------------------------------------
-  mountainImages = {}
-  for i = 0, 5 do
-    local mtn = display.newImageRect(BG_DIR .. "bkg_mountains.png", 1050, 375)
-    mtn.anchorX = 0
-    mtn.anchorY = 1
-    mtn.x = i * 980
-    mtn.y = GROUND_ROW * CELL_H + CELL_H + 30
-    backgroundGroup:insert(mtn)
-    mountainImages[#mountainImages + 1] = mtn
-  end
-
-  ---------------------------------------------------------------------------
-  -- Clouds
-  ---------------------------------------------------------------------------
-  cloudImages = {}
-  math.randomseed(os.time())
-  for i = 1, 15 do
-    local ci = math.random(1, 6)
-    local cloud = display.newImageRect(BG_DIR .. "cloud" .. ci .. ".png", 200, 100)
-    cloud.anchorX = 0
-    cloud.x = math.random(0, MAP_LENGTH)
-    cloud.y = math.random(20, GROUND_ROW * CELL_H - 80)
-    cloud.alpha = 0.8
-    backgroundGroup:insert(cloud)
-    cloudImages[#cloudImages + 1] = cloud
-  end
-
-  ---------------------------------------------------------------------------
-  -- Generate ground tiles (simple flat ground with some gaps/platforms)
-  ---------------------------------------------------------------------------
-  local groundY = GROUND_ROW * CELL_H
-
-  -- Build a simple course pattern:
-  -- Flat ground with occasional gaps and raised platforms
-  local courseMap = {}
-  for col = 1, MAP_COLS do
-    courseMap[col] = true     -- ground by default
-  end
-
-  -- Create gaps (skip first 8 cols and last 8 cols for safety)
-  local gapPositions = { 15, 16, 25, 26, 40, 41, 42, 55, 56, 70, 71, 85, 86, 87, 100, 101 }
-  for _, g in ipairs(gapPositions) do
-    if g <= MAP_COLS then courseMap[g] = false end
-  end
-
-  -- Place ground tiles
-  for col = 1, MAP_COLS do
-    if courseMap[col] then
-      local tileIdx = ((col - 1) % #GROUND_TILES) + 1
-      local tile = display.newImageRect(THEME_DIR .. GROUND_TILES[tileIdx], CELL_W, CELL_H)
-      tile.anchorX = 0
-      tile.anchorY = 0
-      tile.x = col * CELL_W
-      tile.y = groundY
-      gameGroup:insert(tile)
-
-      physics.addBody(tile, "static", {
-        friction = 0.3,
-        bounce = 0,
-      })
-      tile.mapElement = true
-      groundTiles[#groundTiles + 1] = tile
-    end
-  end
-
-  -- Add underground fill rows (below ground)
-  for col = 1, MAP_COLS do
-    if courseMap[col] then
-      for row = 1, 3 do
-        local tileIdx = ((col + row) % #GROUND_TILES) + 1
-        local fill = display.newImageRect(THEME_DIR .. GROUND_TILES[tileIdx], CELL_W, CELL_H)
-        fill.anchorX = 0
-        fill.anchorY = 0
-        fill.x = col * CELL_W
-        fill.y = groundY + row * CELL_H
-        gameGroup:insert(fill)
-      end
-    end
-  end
-
-  -- Raised platforms before gaps (give something to jump to)
-  local platformPositions = {
-    { 13, groundY - CELL_H }, { 14, groundY - CELL_H },
-    { 23, groundY - CELL_H }, { 24, groundY - CELL_H },
-    { 38, groundY - CELL_H }, { 39, groundY - CELL_H },
-    { 43, groundY - CELL_H }, { 44, groundY - CELL_H },
-    { 53, groundY - CELL_H }, { 54, groundY - CELL_H },
-    { 68, groundY - CELL_H }, { 69, groundY - CELL_H },
-    { 83, groundY - CELL_H }, { 84, groundY - CELL_H },
-    { 88, groundY - CELL_H }, { 89, groundY - CELL_H },
-    { 98,  groundY - CELL_H }, { 99, groundY - CELL_H },
-    { 102, groundY - CELL_H }, { 103, groundY - CELL_H },
-  }
-  for _, pp in ipairs(platformPositions) do
-    local col, py = pp[1], pp[2]
-    if col <= MAP_COLS then
-      local tileIdx = (col % #GROUND_TILES) + 1
-      local plat = display.newImageRect(THEME_DIR .. GROUND_TILES[tileIdx], CELL_W, CELL_H)
-      plat.anchorX = 0
-      plat.anchorY = 0
-      plat.x = col * CELL_W
-      plat.y = py
-      gameGroup:insert(plat)
-
-      physics.addBody(plat, "static", { friction = 0.3, bounce = 0 })
-      plat.mapElement = true
-      groundTiles[#groundTiles + 1] = plat
-    end
-  end
-
-  -- Add some decorative trees
-  local treePositions = { 5, 18, 30, 48, 60, 75, 92, 108 }
-  for _, col in ipairs(treePositions) do
-    if courseMap[col] then
-      local ti = math.random(1, 4)
-      local tree = display.newImageRect(THEME_DIR .. "tre" .. ti .. ".png", 160, 100)
-      if tree then
-        tree.anchorX = 0.5
-        tree.anchorY = 1
-        tree.x = col * CELL_W + CELL_W * 0.5
-        tree.y = groundY
-        foregroundGroup:insert(tree)
-      end
-    end
-  end
-
-  ---------------------------------------------------------------------------
-  -- Finish line (Goal)
-  ---------------------------------------------------------------------------
-  local goal = display.newImageRect(THEME_DIR .. "Goal.png", CELL_W, CELL_H * 3)
-  if goal then
-    goal.anchorX = 0.5
-    goal.anchorY = 1
-    goal.x = GOAL_X
-    goal.y = groundY
-    foregroundGroup:insert(goal)
-  end
-
-  ---------------------------------------------------------------------------
-  -- Create player
-  ---------------------------------------------------------------------------
-  local avatarData = storyboard.database.getAvatarData() or { 100, 200, 300, 400 }
-  local avatarName = getAvatarName(avatarData[1])
-  local startX = 296
-  local startY = groundY - 20
-
-  player = createPlayerBody(avatarName, startX, startY, playerGroup)
-  local playerInfo = storyboard.database.getPlayerInformation()
-  player.username = (playerInfo and playerInfo.username) or "Player"
-  player.isBot = false
-
-  ---------------------------------------------------------------------------
-  -- Create 3 AI bots
-  ---------------------------------------------------------------------------
-  local botNames = { "panda", "skunk", "bear" }
-  local botUsernames = { "Bot 1", "Bot 2", "Bot 3" }
-  for i = 1, 3 do
-    local botX = 296 + i * 40
-    local bot = createPlayerBody(botNames[i], botX, startY, playerGroup)
-    bot.username = botUsernames[i]
-    bot.isBot = true
-    bot.topSpeedX = TOP_SPEED * (0.7 + math.random() * 0.4)     -- vary speed
-    bot.accelerateX = ACCELERATION * (0.8 + math.random() * 0.5)
-    bot.botJumpChance = 0.02 + math.random() * 0.03
-    bot.botJumpAhead = math.random(2, 4) * CELL_W
-    bots[i] = bot
-  end
-
-  ---------------------------------------------------------------------------
-  -- Self-arrow (above player)
-  ---------------------------------------------------------------------------
   selfArrow = display.newImageRect("images/game/selfArrow.png", 15, 15)
-  selfArrow.x = startX
-  selfArrow.y = startY - 25
-  uiGroup:insert(selfArrow)
+  selfArrow.x, selfArrow.y = 150, 160
+  view:insert(selfArrow)
+  ninjaArrow = display.newImageRect("images/game/powerup/ninja/arrow.png", 15, 15)
+  ninjaArrow.x, ninjaArrow.y = 150, 160
+  ninjaArrow.alpha = 0
+  view:insert(ninjaArrow)
 
-  ---------------------------------------------------------------------------
-  -- Home button
-  ---------------------------------------------------------------------------
   homeButton = display.newImageRect("images/gui/button/smallHome.png", 35, 35)
-  homeButton.x = homeButton.width * 0.5 + 8
+  homeButton.x = display.screenOriginX + homeButton.width * 0.5 + 8
   homeButton.y = homeButton.height * 0.5 + 8
-  uiGroup:insert(homeButton)
+  view:insert(homeButton)
 
-  ---------------------------------------------------------------------------
-  -- Timer text
-  ---------------------------------------------------------------------------
-  timerText = display.newText("0.0", display.contentCenterX, 15, font, fontSize * 2)
-  timerText:setFillColor(1, 1, 1)
-  timerText.xScale = 0.5
-  timerText.yScale = 0.5
-  uiGroup:insert(timerText)
+  positionText = display.newText("22", 0, 0, font, 40 * 2)
+  positionText:setFillColor(1, 1, 1, 1)
+  positionText.xScale, positionText.yScale = 0.5, 0.5
+  positionText.x, positionText.y = display.contentWidth * 0.5, 20
+  view:insert(positionText)
 
-  ---------------------------------------------------------------------------
-  -- Status text (countdown / finish position)
-  ---------------------------------------------------------------------------
-  statusText = display.newText("", 0, 0, font, fontSize * 2.5)
-  statusText:setFillColor(1, 1, 1)
-  statusText.xScale = 0.5
-  statusText.yScale = 0.5
-  statusText.x = display.contentWidth * 0.5
-  statusText.y = display.contentHeight * 0.35
-  uiGroup:insert(statusText)
-
-  ---------------------------------------------------------------------------
-  -- Jump button (right side of screen — transparent hit area)
-  ---------------------------------------------------------------------------
-  jumpButton = display.newRect(display.contentWidth - 75, display.contentHeight - 75, 150, 150)
-  jumpButton:setFillColor(0, 0, 0, 0)
-  uiGroup:insert(jumpButton)
-
-  -- Jump button icon
-  local jumpIcon = display.newImageRect("images/gui/button/btnJump.png", 50, 50)
-  jumpIcon.x = display.contentWidth - 40
-  jumpIcon.y = display.contentHeight - 40
-  jumpIcon.alpha = 0.6
-  uiGroup:insert(jumpIcon)
-
-  jumpButton:addEventListener("touch", function(event)
-    if event.phase == "began" then
-      display.getCurrentStage():setFocus(event.target)
-      touchingJump = true
-      if isGameRunning and player then
-        jumpPlayer(player)
-      end
-    elseif event.phase == "ended" or event.phase == "cancelled" then
-      display.getCurrentStage():setFocus(nil)
-      touchingJump = false
-    end
-    return true
-  end)
-
-  ---------------------------------------------------------------------------
-  -- Home button handler
-  ---------------------------------------------------------------------------
-  local function onHomeTap(event)
-    if isGameActive then
-      native.showAlert("Fun Run",
-        storyboard.localized.get("QuitGame") or "Quit the race?",
-        { storyboard.localized.get("Cancel") or "Cancel",
-          storyboard.localized.get("Quit") or "Quit" },
-        function(e)
-          if e.action == "clicked" and e.index == 2 then
-            isGameActive = false
-            isGameRunning = false
-            physics.stop()
-            if storyboard.gameType == 1 then
-              storyboard.gotoScene("scenes.postLobbySingle")
-            else
-              storyboard.gotoScene("scenes.postLobby")
-            end
-            storyboard.purgeScene("scenes.gamePlay")
-          end
-        end)
-    end
-    return true
+  local tutorial = storyboard.config.tutorial
+  jumpArea = display.newImageRect("images/transparent.png", 150, 150)
+  jumpArea.x = screenRight - jumpArea.width * 0.5
+  jumpArea.y = display.contentHeight - jumpArea.height * 0.5
+  view:insert(jumpArea)
+  if tutorial then
+    jumpArea.alpha = 0
   end
-  homeButton:addEventListener("tap", onHomeTap)
+  jumpButton = display.newImageRect("images/gui/button/btnJump.png", 64, 64)
+  jumpButton.x = screenRight - jumpButton.width * 0.5
+  jumpButton.y = display.contentHeight - jumpButton.height * 0.5
+  view:insert(jumpButton)
+  if tutorial then
+    jumpButton.alpha = 0
+  end
+  powerUpArea = display.newImageRect("images/transparent.png", 150, 150)
+  powerUpArea.x = display.screenOriginX + powerUpArea.width * 0.5
+  powerUpArea.y = display.contentHeight - powerUpArea.height * 0.5
+  view:insert(powerUpArea)
+  powerUpButton = display.newImageRect("images/gui/button/btnPowerUp.png", 64, 64)
+  powerUpButton.x = display.screenOriginX + powerUpButton.width * 0.5
+  powerUpButton.y = display.contentHeight - powerUpButton.height * 0.5
+  view:insert(powerUpButton)
+  if tutorial then
+    powerUpButton.alpha = 0
+  end
+  if isPC then
+    local function newHint(text, button)
+      local hint = display.newText(text, 0, 0, font, 28)
+      hint:setFillColor(1, 1, 1)
+      hint.xScale, hint.yScale = 0.5, 0.5
+      hint.x, hint.y = button.x, button.y - 40
+      view:insert(hint)
+      return hint
+    end
+    jumpHint = newHint("SPACE", jumpButton)
+    powerUpHint = newHint("X", powerUpButton)
+    if tutorial then
+      jumpHint.alpha, powerUpHint.alpha = 0, 0
+    end
+  end
 
-  ---------------------------------------------------------------------------
-  -- Key listener (Android back)
-  ---------------------------------------------------------------------------
-  keyListener = function(event)
-    if event.keyName == "back" and event.phase == "up" then
-      onHomeTap(event)
+  placeNames = {
+    storyboard.localized.get("1st"),
+    storyboard.localized.get("2nd"),
+    storyboard.localized.get("3rd"),
+    storyboard.localized.get("4th"),
+  }
+  audio.reserveChannels(21)
+end
+
+function scene:enterScene()
+  local view = self.view
+  local killFeed = display.newGroup()
+  local font = storyboard.gameDataTable.font
+  local WHITE = { 1, 1, 1, 1 }
+
+  local raceStarted = false
+  local waitingForGoal = true
+  local ended = false
+  local backKeyEnabled = false
+  local backPressed = false
+  local countdownValue = 3
+  local raceStartTime = 0
+  local position = 0
+  local heads = {}
+  local players = {}
+  local killFeedEntries = {}
+  local me
+  local raceTimer, countdownTimer, inputTimer, finishTimeout, stateTimer, goTimeout
+  local powerUpIcon
+  local hasPowerUpIcon = false
+  local lanMode = (storyboard.gameType == 3 or storyboard.gameType == 4) and lan.isActive()
+
+  local username = lanMode and lan.getName() or storyboard.playerInfo.username
+  local resultReported = false
+  local raceStats = { kills = 0, deaths = 0, suicides = 0, pickups = 0, killsBy = {} }
+  local onPowerUpTouch, onMessage, countdownTick, startCountdown, setUpLan
+
+  system.activate("multitouch")
+
+  local function playSound(name, channel)
+    if storyboard.database.getSound() == 1 then
+      if channel then
+        audio.play(storyboard.gameDataTable.sounds[name], { channel = channel })
+      else
+        audio.play(storyboard.gameDataTable.sounds[name])
+      end
+    end
+  end
+
+  local function volumeForDistance(myX, otherX)
+    local distance = math.abs(myX - otherX)
+    if distance < display.contentWidth then
+      return 0.9
+    elseif distance < display.contentWidth * 2 then
+      return 0.7
+    elseif distance < display.contentWidth * 4 then
+      return 0.4
+    end
+    return 0
+  end
+
+  local function createPlayers(startY)
+    local names = storyboard.gameDataTable.playerListNames
+    for i = 1, #names do
+      if names[i].username ~= "" then
+        local isLocal = names[i].username == username
+
+        local startPowerUp = math.random(1, 10)
+        if startPowerUp == 2 then
+          startPowerUp = 1
+        elseif startPowerUp == 8 then
+          startPowerUp = 6
+        end
+        players[i] = player.new(i, names[i].username, names[i].avatar, startPowerUp, isLocal, players, startY,
+          lanMode and not isLocal)
+        players[i].addPlaySoundFunction(playSound)
+        gameGroup:insert(players[i].getBodyPartsGroup())
+        gameGroup:insert(players[i])
+        gameGroup:insert(players[i].getGhostGroup())
+        view:insert(players[i].getScreenGroup())
+      end
+    end
+  end
+
+  local function newPowerUpIcon(powerUpId, size)
+    local images = {
+      [0] = "images/transparent.png",
+      [1] = "images/game/powerup/blade/icon.png",
+      [2] = "images/game/powerup/trap/icon.png",
+      [3] = "images/game/powerup/lightning/icon.png",
+      [4] = "images/game/powerup/speed/icon.png",
+      [5] = "images/game/powerup/shield/icon.png",
+      [6] = "images/game/powerup/armor/icon.png",
+      [7] = "images/game/powerup/magnet/icon.png",
+      [8] = "images/game/powerup/bounceTrap/icon.png",
+      [9] = "images/game/powerup/ninja/icon.png",
+      [10] = "images/game/powerup/jump/icon.png",
+      [99] = "images/game/powerup/mapIcon.png",
+    }
+    if images[powerUpId] then
+      return display.newImageRect(images[powerUpId], size, size)
+    end
+  end
+
+  local function removePowerUpIcon()
+    if powerUpIcon then
+      display.remove(powerUpIcon)
+      powerUpIcon = nil
+      hasPowerUpIcon = false
+    end
+  end
+
+  local function showPowerUpIcon(powerUpId)
+    if powerUpIcon then
+      display.remove(powerUpIcon)
+      powerUpIcon = nil
+    end
+    if powerUpId > 50 then
+      powerUpId = powerUpId - 50
+    end
+    powerUpIcon = newPowerUpIcon(powerUpId, 60)
+    powerUpIcon.x = display.screenOriginX + 28
+    powerUpIcon.y = display.contentHeight - 30
+    view:insert(powerUpIcon)
+    hasPowerUpIcon = true
+  end
+
+  local function onPowerUpPickedUp(powerUpId)
+    raceStats.pickups = raceStats.pickups + 1
+    showPowerUpIcon(powerUpId)
+  end
+
+  local function updateNinjaArrow()
+    ninjaArrow.alpha = me.ninjaMark and 1 or 0
+  end
+
+  local function updateHead(i)
+    heads[i].x = players[i].x / (map.getLength() - 10) * PROGRESS_BAR_WIDTH + PROGRESS_BAR_LEFT
+  end
+
+  local function showPosition(place)
+    if place ~= positionText.text then
+      positionText.text = placeNames[place]
+    end
+  end
+
+  local function removeUnlessEnded(object)
+    if object and not ended then
+      display.remove(object)
+    end
+  end
+
+  local function addKillFeedEntry(killerId, powerUpId, victimId)
+    if not players or ended then
+      return
+    end
+    local killerName = players[killerId].getUsername()
+    local victimName = players[victimId].getUsername()
+    local LIFETIME = 6000
+    if powerUpId == 7 or powerUpId == 99 then
+      victimName = ""
+    end
+    local rowY = -(#killFeedEntries / 3 + 1) * display.contentHeight * 0.05
+
+    local victimText = display.newText(victimName, 0, 0, font, 28 * 1.5)
+    victimText.anchorX, victimText.anchorY = 1, 0
+    victimText:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
+    victimText.xScale, victimText.yScale = 0.5, 0.5
+    victimText.x = display.screenOriginX + display.actualContentWidth - 4
+    victimText.y = rowY
+    timer.performWithDelay(LIFETIME, function() return removeUnlessEnded(victimText) end, 1)
+
+    local icon = newPowerUpIcon(powerUpId, 26)
+    icon.anchorX, icon.anchorY = 1, 0
+    icon.x = victimText.x - victimText.width * 0.5
+    icon.y = 2 + rowY
+    timer.performWithDelay(LIFETIME, function() return removeUnlessEnded(icon) end, 1)
+
+    local killerText = display.newText(killerName, 0, 0, font, 28 * 1.5)
+    killerText.anchorX, killerText.anchorY = 1, 0
+    killerText:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
+    killerText.xScale, killerText.yScale = 0.5, 0.5
+    killerText.x = icon.x - icon.width
+    killerText.y = rowY
+    timer.performWithDelay(LIFETIME, function() return removeUnlessEnded(killerText) end, 1)
+
+    for _ = 1, 3 do
+      killFeedEntries[#killFeedEntries + 1] = 1
+    end
+    killFeed:insert(victimText)
+    killFeed:insert(icon)
+    killFeed:insert(killerText)
+    view:insert(killFeed)
+  end
+
+  local function recordKill(killerId, powerUpId, victimId)
+    local kind = KILLING_POWER_UPS[powerUpId]
+    if not kind or not me then
+      return
+    end
+    if killerId == me.id and victimId == me.id then
+      raceStats.suicides = raceStats.suicides + 1
+    elseif killerId == me.id then
+      raceStats.kills = raceStats.kills + 1
+      raceStats.killsBy[kind] = (raceStats.killsBy[kind] or 0) + 1
+    end
+    if victimId == me.id then
+      raceStats.deaths = raceStats.deaths + 1
+    end
+  end
+
+  local function killMessage(killerId, powerUpId, victimId)
+    recordKill(killerId, powerUpId, victimId)
+    killFeed.y = killFeed.y + display.contentHeight * 0.05
+    timer.performWithDelay(200, function() return addKillFeedEntry(killerId, powerUpId, victimId) end, 1)
+  end
+
+  local function isNearPlayer(i)
+    local other = players[i]
+    if other and me and other.x and me.x then
+      return other.x >= me.x - 400 and other.x <= me.x + 580
+    end
+    return false
+  end
+
+  local function updateCamera()
+    if ended or not me or not me.x or not gameGroup then
+      return
+    end
+    if storyboard.config.tutorial then
+      tutorialModule.update(me)
+      if me.x > 4300 then
+        selfArrow.alpha = 0
+        return
+      end
+    end
+    gameGroup.x = -me.x + PLAYER_SCREEN_X
+    gameGroup.y = -me.y + PLAYER_SCREEN_Y
+    foregroundGroup.x = -me.x + PLAYER_SCREEN_X
+    foregroundGroup.y = -me.y + PLAYER_SCREEN_Y
+    nearGroup.x = -me.x * 0.8
+    nearGroup.y = -me.y * 0.8
+    mountainGroup.x = -me.x * 0.2
+    mountainGroup.y = -me.y * 0.2
+    cloudGroup.x = -me.x * 0.05
+    cloudGroup.y = -me.y * 0.05
+    if raceStarted then
+      for i = 1, #players do
+        if isNearPlayer(i) then
+          players[i].interpolation()
+          players[i].calculateRotation()
+        else
+          players[i].forcePlayer()
+        end
+      end
+    end
+  end
+
+  local function gotoResults()
+    if not ended then
+      storyboard.gotoScene("scenes.postLobby")
+      storyboard.purgeScene("scenes.gamePlay")
+    end
+  end
+
+  local allFinished = false
+  local function updateRanking(finishedId)
+    if ended or allFinished then
+      return
+    end
+    local finished, myPlace = 0, 1
+    local ranking = {}
+    for i = 1, #players do
+      local goalTime = players[i].getPlayerGoalTime()
+      if goalTime == -2 then
+        goalTime = 9999999999
+      end
+      ranking[i] = { username = players[i].getUsername(), goalTime = goalTime, index = i }
+      if goalTime > 0 then
+        finished = finished + 1
+        if goalTime < me.getPlayerGoalTime() then
+          myPlace = myPlace + 1
+        end
+      end
+    end
+    storyboard.gameDataTable.quickPlayerRankingTable = ranking
+    if finishedId == me.id then
+      showPosition(myPlace)
+    end
+    if finished == #players then
+      allFinished = true
+      if finishTimeout then
+        timer.cancel(finishTimeout)
+        finishTimeout = nil
+      end
+
+      if storyboard.gameType == 2 and not resultReported then
+        resultReported = true
+        local sorted = {}
+        for i, entry in ipairs(ranking) do
+          sorted[i] = entry
+        end
+        table.sort(sorted, function(a, b) return a.goalTime < b.goalTime end)
+        local racers = {}
+        for place, entry in ipairs(sorted) do
+          local racer = { name = entry.username, place = place, isPlayer = entry.index == me.id }
+          for _, lobbyRacer in ipairs(storyboard.tcpClient.getRacers()) do
+            if lobbyRacer.name == entry.username then
+              racer.botId = lobbyRacer.botId
+            end
+          end
+          racers[place] = racer
+          if racer.isPlayer then
+            raceStats.position = place
+          end
+        end
+        raceStats.racers = racers
+        raceStats.mapId = storyboard.gameDataTable.mapSelected
+        raceStats.gameType = storyboard.gameType
+        storyboard.gameDataTable.gameStats = storyboard.tcpClient.reportRaceResult(raceStats)
+      end
+      timer.performWithDelay(2000, gotoResults, 1)
+    end
+  end
+
+  local function finishStragglers()
+    finishTimeout = nil
+    if ended or allFinished then
+      return
+    end
+    local now = system.getTimer() - raceStartTime
+    for i = 1, #players do
+      if players[i].getPlayerGoalTime() < 0 then
+        local remaining = math.max(0, map.getLength() - players[i].x)
+        players[i].setPlayerGoalTime(now + remaining / 300 * 1000)
+        players[i].stopPlayer()
+      end
+    end
+    updateRanking(me.id)
+  end
+
+  local function onPlayerFinished()
+    me.setCurrentGameTime(system.getTimer() - raceStartTime)
+    powerUpArea:removeEventListener("touch", powerUpArea)
+    jumpArea:removeEventListener("touch", jumpArea)
+    me.setPlayerGoalTime(me.getCurrentGameTime())
+    killMessage(me.id, 99, me.id)
+    if lanMode then
+      lan.sendRace({ m = "j", i = me.id, s = { x = me.x, s = me.getCurrentGameTime() } })
+    end
+    updateRanking(me.id)
+    if not allFinished then
+      finishTimeout = timer.performWithDelay(FINISH_TIMEOUT, finishStragglers, 1)
+    end
+  end
+
+  local function raceTick()
+    if not raceStarted or ended then
+      return
+    end
+    position = 1
+    for i = 1, #players do
+      local racer = players[i]
+      if map.isInGoal(racer.x) then
+        racer.stopPlayer()
+        if waitingForGoal and map.isInGoal(me.x) then
+          waitingForGoal = false
+          onPlayerFinished()
+        end
+      else
+        racer.accelerate()
+      end
+      if racer.x > me.x then
+        position = position + 1
+      end
+      updateHead(i)
+    end
+    updateNinjaArrow()
+    if not map.isInGoal(me.x) then
+      showPosition(position)
+      me.setPlayerPosition(position, #players)
+    end
+  end
+
+  local function stopGame()
+    if ended then
+      return
+    end
+    ended = true
+    physics.pause()
+    for i = 1, #players do
+      players[i].pauseSprite()
+    end
+    if me.getPlayerGoalTime() < 0 then
+      powerUpArea:removeEventListener("touch", powerUpArea)
+      jumpArea:removeEventListener("touch", jumpArea)
+    end
+  end
+
+  local function showCountdown(value)
+    if countdownImage then
+      display.remove(countdownImage)
+      countdownImage = nil
+    end
+    if value == "GO!" or value == storyboard.localized.get("Go") then
+      countdownImage = display.newImageRect("images/game/countdownGo.png", 129, 70)
+    else
+      countdownImage = display.newImageRect("images/game/countdown" .. tostring(value):sub(1, 1) .. ".png", 129, 70)
+    end
+    if countdownImage then
+      countdownImage.x = display.contentWidth * 0.5
+      countdownImage.y = display.contentHeight * 0.3
+      view:insert(countdownImage)
+      transition.to(countdownImage, { time = 400, alpha = 1 })
+      transition.to(countdownImage, { time = 400, delay = 500, alpha = 0 })
+    end
+  end
+
+  local function leaveGame()
+    if lanMode then
+      lan.leave()
+    end
+    if storyboard.config.tutorial then
+      storyboard.gotoScene("scenes.playMenu")
+    else
+      storyboard.gotoScene("scenes.mainMenu")
+    end
+    storyboard.purgeScene("scenes.gamePlay")
+  end
+
+  local function reportQuit()
+    if storyboard.gameType == 2 and not resultReported and me and me.getPlayerGoalTime() < 0 then
+      resultReported = true
+      local racers = {}
+      for _, lobbyRacer in ipairs(storyboard.tcpClient.getRacers()) do
+        racers[#racers + 1] = { name = lobbyRacer.name, botId = lobbyRacer.botId, place = 1, isPlayer = lobbyRacer.isPlayer }
+      end
+      raceStats.position = #players
+      for _, racer in ipairs(racers) do
+        if racer.isPlayer then
+          racer.place = #players
+        end
+      end
+      raceStats.racers = racers
+      raceStats.quit = true
+      storyboard.tcpClient.reportRaceResult(raceStats)
+    end
+  end
+
+  local function onQuitAlert(event)
+    if event.action == "clicked" then
+      quitAlert = nil
+      local yes = isAndroid and 1 or 2
+      if event.index == yes and not ended then
+        reportQuit()
+        stopGame()
+        timer.performWithDelay(200, leaveGame, 1)
+      end
+    end
+  end
+
+  local function askQuit()
+    local message = storyboard.localized.get("QuitGame")
+    if storyboard.gameType == 2 and me.getPlayerGoalTime() <= 0 then
+      message = storyboard.localized.get("QuitGameWithWarning")
+    end
+    local yes, no = storyboard.localized.get("Yes"), storyboard.localized.get("No")
+    if isAndroid then
+      quitAlert = native.showAlert(storyboard.localized.get("Quit"), message, { yes, no }, onQuitAlert)
+    else
+      quitAlert = native.showAlert(storyboard.localized.get("Quit"), message, { no, yes }, onQuitAlert)
+    end
+  end
+
+  function onMessage(message)
+    if ended or not message or not message.m then
+      return
+    end
+    local racer = players[message.i]
+    if not racer then
+      return
+    end
+    racer.connected = true
+    if message.s and message.s.x then
+      racer.setSoundVolume(volumeForDistance(me.x, message.s.x))
+    end
+    if message.m == "h" then
+      if racer.canOtherPlayerUsePU() then
+        powerUps.usePowerUp(message.p.t, message.i, username, nil, message.p.x, message.p.y, gameGroup, view, players)
+        if message.p.t <= 50 then
+          racer.usedPowerUp()
+        end
+      end
+    elseif message.m == "j" then
+      if racer.getPlayerGoalTime() > 0 then
+        return
+      end
+      racer.setPlayerGoalTime(message.s.s)
+      killMessage(message.i, 99, message.i)
+      updateRanking(message.i)
+    end
+  end
+
+  function countdownTick(event)
+    if ended then
+      return
+    end
+    showCountdown(countdownValue)
+    if countdownValue == storyboard.localized.get("Go") then
+      raceStarted = true
+      raceStartTime = system.getTimer()
+      for i = 1, #players do
+        players[i].setBotModuleFunction(onMessage, raceStartTime)
+      end
+      playSound("start")
+      timer.cancel(event.source)
+    else
+      playSound("countdown")
+      countdownValue = countdownValue - 1
+      if countdownValue == 0 then
+        countdownValue = storyboard.localized.get("Go")
+      end
+    end
+  end
+
+  local function onJumpTouch(_, event)
+    if event.phase == "began" and raceStarted then
+      local tutorialAllows = false
+      if storyboard.config.tutorial then
+        tutorialAllows = tutorialModule.jumpButtonClicked()
+      end
+      if me.canJump() or tutorialAllows then
+        me.jump()
+        playSound("jump")
+        me.onGround = false
+      end
       return true
     end
   end
-  Runtime:addEventListener("key", keyListener)
-end
 
----------------------------------------------------------------------------------
--- ENTER SCENE
----------------------------------------------------------------------------------
-function scene:enterScene(event)
-  isGameActive = true
-  isGameRunning = false
-  playerFinished = false
-  finishOrder = {}
+  local function useSecondPowerUp(powerUpId)
+    powerUps.usePowerUp(powerUpId, me.id, username, me, 0, 0, gameGroup, view, players)
+    if lanMode then
+      lan.sendRace({ m = "h", i = me.id, p = { t = powerUpId, x = me.x, y = me.y }, s = { x = me.x } })
+    end
+  end
 
-  -- Resume physics (was started+paused in createScene)
+  function onPowerUpTouch(_, event)
+    if event.phase == "began" and raceStarted then
+      local tutorialAllows = false
+      if storyboard.config.tutorial then
+        tutorialAllows = tutorialModule.puButtonClicked()
+      end
+      local powerUp = me.getPowerUp()
+      local canUse = powerUp > 0 and hasPowerUpIcon
+      if canUse or tutorialAllows then
+        me.usedPowerUp()
+        powerUps.usePowerUp(powerUp, me.id, username, me, 0, 0, gameGroup, view, players)
+        if lanMode then
+          lan.sendRace({ m = "h", i = me.id, p = { t = powerUp, x = me.x, y = me.y }, s = { x = me.x } })
+        end
+        if powerUp > 50 then
+          timer.performWithDelay(200, function() return useSecondPowerUp(powerUp - 50) end, 1)
+        end
+        removePowerUpIcon()
+      end
+      return true
+    end
+  end
+
+  local function onHomeTouch(_, event)
+    if event.phase == "began" then
+      askQuit()
+    end
+  end
+
+  local function cancelTimers()
+    for _, handle in pairs({ raceTimer = raceTimer, inputTimer = inputTimer, countdownTimer = countdownTimer,
+      finishTimeout = finishTimeout, stateTimer = stateTimer, goTimeout = goTimeout }) do
+      timer.cancel(handle)
+    end
+    raceTimer, inputTimer, countdownTimer, finishTimeout, stateTimer, goTimeout = nil, nil, nil, nil, nil, nil
+  end
+
+  local function onFrame()
+    if backPressed then
+      backPressed = false
+      askQuit()
+    end
+  end
+
+  local function onKey(event)
+    if event.phase == "down" and ended == false and raceStarted then
+      if event.keyName == "space" then
+        onJumpTouch(nil, { phase = "began" })
+        return true
+      elseif event.keyName == "x" then
+        onPowerUpTouch(nil, { phase = "began" })
+        return true
+      end
+    end
+    if event.phase == "up" and event.keyName == "back" then
+      if backKeyEnabled then
+        backPressed = true
+      end
+      return true
+    end
+    return false
+  end
+
+  local function enableInput()
+    if storyboard.getCurrentSceneName() == "scenes.gamePlay" then
+      jumpArea.touch = onJumpTouch
+      powerUpArea.touch = onPowerUpTouch
+      homeButton.touch = onHomeTouch
+      powerUpArea:addEventListener("touch", powerUpArea)
+      jumpArea:addEventListener("touch", jumpArea)
+      homeButton:addEventListener("touch", homeButton)
+      backKeyEnabled = true
+    end
+  end
+
+  local function bringControlsToFront()
+    view:insert(homeButton)
+    view:insert(positionText)
+    view:insert(killFeed)
+    view:insert(jumpArea)
+    view:insert(jumpButton)
+    view:insert(powerUpButton)
+    if jumpHint then
+      view:insert(jumpHint)
+      view:insert(powerUpHint)
+    end
+    if powerUpIcon then
+      view:insert(powerUpIcon)
+    end
+  end
+
+  function cleanUp()
+    ended = true
+    cancelTimers()
+    if lanMode then
+      lan.setHandler(nil)
+    end
+    Runtime:removeEventListener("enterFrame", updateCamera)
+    Runtime:removeEventListener("key", onKey)
+    Runtime:removeEventListener("enterFrame", onFrame)
+    system.deactivate("multitouch")
+    if quitAlert then
+      native.cancelAlert(quitAlert)
+      quitAlert = nil
+    end
+    powerUps.clean()
+    for i = 1, #players do
+      if players[i] then
+        players[i].clean()
+        players[i] = nil
+      end
+    end
+    players = nil
+    map.clean()
+    countdownImage = nil
+    physics.stop()
+    tutorialModule.clean()
+    storyboard.config.tutorial = false
+  end
+
+  local function onLanRace(msg)
+    local racer = players[msg.i]
+    if not racer or msg.i == me.id then
+      return
+    end
+    if msg.m == "s" then
+      if raceStarted then
+        racer.setRemoteState(msg.x, msg.y, msg.vx, msg.vy)
+      end
+    else
+      onMessage(msg)
+    end
+  end
+
+  local function disconnectRacer(racer, index)
+    if racer and racer ~= me and racer.getPlayerGoalTime() < 0 then
+      racer.setDisconnected()
+      racer.setPlayerGoalTime(-2)
+      if not ended then
+        updateRanking(index)
+      end
+    end
+  end
+
+  local function onLanEvent(event)
+    if ended then
+      return
+    end
+    if event.type == "go" then
+      startCountdown()
+    elseif event.type == "race" then
+      onLanRace(event.msg)
+    elseif event.type == "gone" then
+      for i = 1, #players do
+        if players[i].getUsername() == event.name then
+          disconnectRacer(players[i], i)
+        end
+      end
+    elseif event.type == "closed" then
+      for i = 1, #players do
+        disconnectRacer(players[i], i)
+      end
+    end
+  end
+
+  local function sendLanState()
+    if raceStarted and not ended and me and me.x then
+      local vx, vy = me:getLinearVelocity()
+      lan.sendRace({ m = "s", i = me.id, x = me.x, y = me.y, vx = vx, vy = vy })
+    end
+  end
+
+  function setUpLan()
+    lan.setHandler(onLanEvent)
+    stateTimer = timer.performWithDelay(50, sendLanState, 0)
+    lan.sendReady()
+
+    goTimeout = timer.performWithDelay(20000, startCountdown, 1)
+  end
+
   physics.setVelocityIterations(2)
   physics.setPositionIterations(4)
-  physics.start()   -- unpause
-  physics.setGravity(0, GRAVITY)
-
-  -- All players start as static until "Go!"
-  if player and player.setLinearVelocity then
-    player.bodyType = "static"
+  physics.start()
+  physics.setGravity(0, 20)
+  storyboard.powerUpPositions = {}
+  local startY = map.init(storyboard.gameDataTable.mapSelected, gameGroup, foregroundGroup, nearGroup, mountainGroup,
+    cloudGroup, skyGroup)
+  createPlayers(startY)
+  for i = 1, #players do
+    if players[i].getUsername() == username then
+      me = players[i]
+      position = #players - i + 1
+      me.setUpdatePowerUpImageFunction(onPowerUpPickedUp)
+      me.mobileUser = true
+      updateCamera()
+    end
+    players[i].connected = false
+    players[i].setKillMessageFunction(killMessage)
   end
-  for _, bot in ipairs(bots) do
-    if bot and bot.setLinearVelocity then
-      bot.bodyType = "static"
-    end
-  end
+  map.setMapName(gameGroup, me.x)
+  powerUps.init()
+  powerUps.addPlaySoundFunction(playSound)
+  showPowerUpIcon(me.getPowerUp())
 
-  -----------------------------------------------------------------------
-  -- Countdown sequence (3, 2, 1, Go!)
-  -----------------------------------------------------------------------
-  local countdownStep = 3
-  statusText.text = ""
-
-  -- Show countdown image
-  local countdownImg = nil
-  local function showCountdownImage(num)
-    if countdownImg then
-      countdownImg:removeSelf(); countdownImg = nil
-    end
-    local path
-    if num > 0 then
-      path = "images/game/countdown" .. num .. ".png"
-    else
-      path = "images/game/countdownGo.png"
-    end
-    countdownImg = display.newImageRect(path, 129, 70)
-    if countdownImg then
-      countdownImg.x = display.contentWidth * 0.5
-      countdownImg.y = display.contentHeight * 0.3
-      uiGroup:insert(countdownImg)
+  for i = 1, #players do
+    heads[i] = players[i].getPlayerHead()
+    heads[i].x = players[i].x / (map.getLength() - 10) * PROGRESS_BAR_WIDTH + PROGRESS_BAR_LEFT
+    heads[i].y = display.contentHeight + 2
+    view:insert(heads[i])
+    if storyboard.config.tutorial then
+      heads[i].alpha = 0
     end
   end
+  view:insert(heads[me.id])
+  showPosition(position)
 
-  showCountdownImage(3)
-
-  countdownTimer = timer.performWithDelay(1000, function()
-    countdownStep = countdownStep - 1
-    if countdownStep > 0 then
-      showCountdownImage(countdownStep)
-    elseif countdownStep == 0 then
-      -- "Go!"
-      showCountdownImage(0)
-      isGameRunning = true
-      gameStartTime = system.getTimer()
-
-      -- Make players dynamic
-      if player then player.bodyType = "dynamic" end
-      for _, bot in ipairs(bots) do
-        bot.bodyType = "dynamic"
-      end
-
-      -- Fade out "Go!" after 500ms
-      timer.performWithDelay(500, function()
-        if countdownImg then
-          transition.to(countdownImg, {
-            alpha = 0,
-            time = 300,
-            onComplete = function()
-              if countdownImg then
-                countdownImg:removeSelf(); countdownImg = nil
-              end
-            end
-          })
-        end
-      end)
-    end
-  end, 3)
-
-  -----------------------------------------------------------------------
-  -- enterFrame listener — camera, acceleration, goal check, bot AI
-  -----------------------------------------------------------------------
-  enterFrameListener = function()
-    if not isGameActive then return end
-
-    local dt = 16.67     -- approximate frame time at 60fps
-
-    -- Update timer
-    if isGameRunning and timerText then
-      local elapsed = (system.getTimer() - gameStartTime) / 1000
-      timerText.text = string.format("%.1f", elapsed)
-    end
-
-    -- Accelerate player
-    if isGameRunning and player and player.removeSelf and player.goalTime < 0 then
-      acceleratePlayer(player, dt)
-    end
-
-    -- Bot AI
-    if isGameRunning then
-      for _, bot in ipairs(bots) do
-        if bot and bot.removeSelf and bot.goalTime < 0 then
-          acceleratePlayer(bot, dt)
-
-          -- Bots jump at gaps or randomly
-          local botAheadX = bot.x + (bot.botJumpAhead or 200)
-          local botCol = math.floor(botAheadX / CELL_W)
-          -- Simple gap detection: check if ground exists ahead
-          local shouldJump = false
-          if math.random() < (bot.botJumpChance or 0.03) then
-            shouldJump = true
-          end
-
-          -- Always jump near gap positions
-          local gapCols = { 15, 16, 25, 26, 40, 41, 42, 55, 56, 70, 71, 85, 86, 87, 100, 101 }
-          for _, gc in ipairs(gapCols) do
-            if botCol >= gc - 3 and botCol <= gc - 1 then
-              shouldJump = true
-              break
-            end
-          end
-
-          if shouldJump and bot.onGround then
-            jumpPlayer(bot)
-          end
-        end
-      end
-    end
-
-    -- Camera follow player
-    if player and player.removeSelf then
-      local targetX = -player.x + CAM_OFFSET_X
-      local targetY = -player.y + CAM_OFFSET_Y
-
-      -- Clamp camera
-      targetY = math.min(targetY, 50)
-      targetY = math.max(targetY, -(GROUND_ROW * CELL_H) + 100)
-
-      gameGroup.x = targetX
-      gameGroup.y = targetY
-      foregroundGroup.x = targetX
-      foregroundGroup.y = targetY
-      playerGroup.x = targetX
-      playerGroup.y = targetY
-      effectGroup.x = targetX
-      effectGroup.y = targetY
-
-      -- Parallax backgrounds
-      backgroundGroup.x = -player.x * 0.3
-      backgroundGroup.y = targetY * 0.3
-
-      -- Self arrow follows player (in world coords)
-      if selfArrow then
-        selfArrow.x = display.contentWidth * 0.5 + (player.x + targetX - CAM_OFFSET_X) * 0
-        selfArrow.x = CAM_OFFSET_X
-        selfArrow.y = player.y + targetY - 25
-      end
-
-      -- Respawn if fell off
-      if player.y > (GROUND_ROW + 4) * CELL_H then
-        player.x = player.x - 200
-        player.y = (GROUND_ROW - 1) * CELL_H
-        player:setLinearVelocity(0, 0)
-        player.onGround = false
-      end
-    end
-
-    -- Respawn bots if they fall
-    for _, bot in ipairs(bots) do
-      if bot and bot.removeSelf and bot.y > (GROUND_ROW + 4) * CELL_H then
-        bot.x = bot.x - 200
-        bot.y = (GROUND_ROW - 1) * CELL_H
-        bot:setLinearVelocity(0, 0)
-        bot.onGround = false
-      end
-    end
-
-    -- Goal check
-    if isGameRunning then
-      -- Check player
-      if player and player.removeSelf and player.goalTime < 0 and player.x >= GOAL_X then
-        player.goalTime = system.getTimer() - gameStartTime
-        player:setLinearVelocity(0, 0)
-        player.bodyType = "static"
-        finishOrder[#finishOrder + 1] = player
-        playerFinished = true
-
-        local pos = #finishOrder
-        statusText.text = positionLabels[pos] or tostring(pos)
-
-        -- Go to results after 2 seconds
-        timer.performWithDelay(2000, function()
-          if isGameActive then
-            isGameActive = false
-            isGameRunning = false
-
-            local coinsWon = 0
-            if pos == 1 then
-              coinsWon = 500
-            elseif pos == 2 then
-              coinsWon = 250
-            elseif pos == 3 then
-              coinsWon = 100
-            else
-              coinsWon = 50
-            end
-
-            storyboard.gameDataTable.gameStats = {
-              position = pos,
-              time = player.goalTime / 1000,
-              coinsGained = coinsWon,
-              xpGained = coinsWon,
-            }
-            storyboard.database.increaseMoney(coinsWon)
-
-            -- Set player names for result screen
-            storyboard.gameDataTable.playerListNames = {
-              { username = player.username },
-              { username = bots[1] and bots[1].username or "Bot 1" },
-              { username = bots[2] and bots[2].username or "Bot 2" },
-              { username = bots[3] and bots[3].username or "Bot 3" },
-            }
-
-            physics.stop()
-            storyboard.gotoScene("scenes.postLobbySingle")
-            storyboard.purgeScene("scenes.gamePlay")
-          end
-        end)
-      end
-
-      -- Check bots
-      for _, bot in ipairs(bots) do
-        if bot and bot.removeSelf and bot.goalTime < 0 and bot.x >= GOAL_X then
-          bot.goalTime = system.getTimer() - gameStartTime
-          bot:setLinearVelocity(0, 0)
-          bot.bodyType = "static"
-          finishOrder[#finishOrder + 1] = bot
-        end
-      end
+  raceTimer = timer.performWithDelay(100, raceTick, 0)
+  function startCountdown()
+    if not countdownTimer and not ended then
+      countdownTimer = timer.performWithDelay(1000, countdownTick, 7)
     end
   end
-
-  Runtime:addEventListener("enterFrame", enterFrameListener)
+  if lanMode then
+    setUpLan()
+  else
+    startCountdown()
+  end
+  if storyboard.config.tutorial then
+    tutorialModule.init(view, physics)
+    tutorialModule.setFunctions(function()
+      jumpArea.alpha = 1
+      jumpButton.alpha = 1
+      if jumpHint then
+        jumpHint.alpha = 1
+      end
+    end, function()
+      powerUpButton.alpha = 1
+      if powerUpHint then
+        powerUpHint.alpha = 1
+      end
+    end)
+  end
+  bringControlsToFront()
+  Runtime:addEventListener("enterFrame", updateCamera)
+  inputTimer = timer.performWithDelay(500, enableInput, 1)
+  Runtime:addEventListener("key", onKey)
+  Runtime:addEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- EXIT SCENE
----------------------------------------------------------------------------------
-function scene:exitScene(event)
-  isGameActive = false
-  isGameRunning = false
-
-  if countdownTimer then
-    timer.cancel(countdownTimer); countdownTimer = nil
+function scene:exitScene()
+  if homeButton then
+    homeButton:removeEventListener("touch", homeButton)
   end
-  if gameTimer then
-    timer.cancel(gameTimer); gameTimer = nil
+  if cleanUp then
+    cleanUp()
+    cleanUp = nil
   end
-
-  if enterFrameListener then
-    Runtime:removeEventListener("enterFrame", enterFrameListener)
-    enterFrameListener = nil
-  end
-
-  Runtime:removeEventListener("key", keyListener)
-
-  pcall(function() physics.stop() end)
 end
 
----------------------------------------------------------------------------------
--- DESTROY SCENE
----------------------------------------------------------------------------------
-function scene:destroyScene(event)
-  backgroundGroup = nil
-  gameGroup = nil
-  foregroundGroup = nil
-  playerGroup = nil
-  effectGroup = nil
-  uiGroup = nil
-  statusText = nil
-  selfArrow = nil
-  ninjaArrow = nil
-  homeButton = nil
-  timerText = nil
-  jumpButton = nil
-  powerupButton = nil
-  player = nil
-  bots = {}
-  groundTiles = {}
-  mountainImages = nil
-  cloudImages = nil
-  enterFrameListener = nil
-  keyListener = nil
-  gameTimer = nil
-  countdownTimer = nil
+function scene:destroyScene()
+  quitAlert = nil
+  placeNames = nil
 end
 
 scene:addEventListener("createScene", scene)

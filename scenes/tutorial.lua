@@ -1,182 +1,141 @@
----------------------------------------------------------------------------------
--- tutorial.lua — Tutorial scene
----------------------------------------------------------------------------------
+-- help pages.
+
 local storyboard = require("modules.storyboard")
+local gui = require("modules.gui")
+
 local scene = storyboard.newScene()
 
--- Module-level variables
-local backButton
 local nextButton
-local keyListener
-local background
-local tutorialStep = 1
-local tutorialImages = {}
-local instructionText
-local enterFrameListener
+local pages
+local onFrame, onKey
 
-local MAX_STEPS = 5 -- placeholder number of tutorial pages
+function scene:createScene()
+  local view = self.view
+  local font = storyboard.gameDataTable.font
+  local fontSize = storyboard.localized.getFontSize() + 1
+  local W, H = display.contentWidth, display.contentHeight
+  local WHITE = { 1, 1, 1, 1 }
 
----------------------------------------------------------------------------------
--- CREATE SCENE
----------------------------------------------------------------------------------
-function scene:createScene(event)
-    local view = self.view
-    local gui = require("modules.gui")
-    local font = storyboard.gameDataTable.font
-    local fontSize = storyboard.localized.getFontSize()
-    local textColor = {1, 1, 1, 1}
+  local background = display.newImageRect("images/gui/background/login.png", 480, 320)
+  background.x, background.y = W * 0.5, H * 0.5
+  view:insert(background)
+  pages = display.newGroup()
 
-    tutorialStep = 1
+  local function addText(text, size, x, y)
+    local label = display.newText(text, 0, 0, font, size)
+    label:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
+    label.xScale, label.yScale = 0.5, 0.5
+    label.x, label.y = x, y
+    pages:insert(label)
+    return label
+  end
+  local function addImage(path, width, height, x, y)
+    local image = display.newImageRect(path, width, height)
+    image.x, image.y = x, y
+    pages:insert(image)
+  end
 
-    ---------------------------------------------------------------------------
-    -- Background
-    ---------------------------------------------------------------------------
-    background = display.newImageRect("images/gui/background/login.png",
-        display.contentWidth, display.contentHeight)
-    background.x = display.contentCenterX
-    background.y = display.contentCenterY
-    view:insert(background)
+  addText(storyboard.localized.get("InGame"), 50, 0, H * 0.15)
+  addImage("images/gui/button/btnJump.png", 64, 64, W * 0.3, H * 0.4)
+  addImage("images/gui/button/btnPowerUp.png", 64, 64, -W * 0.3, H * 0.4)
+  addText(storyboard.localized.get("PowerUpButton"), fontSize * 2, -W * 0.3, H * 0.55)
+  addText(storyboard.localized.get("JumpButton"), fontSize * 2, W * 0.3, H * 0.55)
 
-    ---------------------------------------------------------------------------
-    -- Title
-    ---------------------------------------------------------------------------
-    local titleText = display.newText({
-        text = storyboard.localized.get("Tutorial") or "Tutorial",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.08,
-        font = font,
-        fontSize = fontSize * 2,
-    })
-    titleText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(titleText)
+  addText(storyboard.localized.get("MainMenu"), 50, W, H * 0.15)
+  addImage("images/gui/button/blank.png", 60, 50, W * 0.8, H * 0.4)
+  addText("LAN", 44, W * 0.8, H * 0.4)
+  addImage("images/gui/button/market.png", 80, 50, W * 1.2, H * 0.4)
+  addText("Play on your network", fontSize * 2, W * 0.8, H * 0.55)
+  addText(storyboard.localized.get("Customize"), fontSize * 2, W * 1.2, H * 0.55)
 
-    ---------------------------------------------------------------------------
-    -- Tutorial content area
-    ---------------------------------------------------------------------------
-    local contentBg = display.newRect(display.contentCenterX, display.contentCenterY - 10,
-        display.contentWidth * 0.85, display.contentHeight * 0.55)
-    contentBg:setFillColor(0, 0, 0, 0.25)
-    view:insert(contentBg)
+  addText(storyboard.localized.get("PlayMenu"), 50, W * 2, H * 0.15)
+  addImage("images/gui/button/quickPlay.png", 75, 75, W * 1.8, H * 0.4)
+  addImage("images/gui/button/host.png", 75, 75, W * 2.2, H * 0.4)
+  addText(storyboard.localized.get("PlayWithRandomPeople"), fontSize * 2, W * 1.8, H * 0.55)
+  addText("Play with LAN", fontSize * 2, W * 2.2, H * 0.55)
 
-    ---------------------------------------------------------------------------
-    -- Instruction text (changes per step)
-    ---------------------------------------------------------------------------
-    local tutorialTexts = {
-        storyboard.localized.get("TutorialStep1") or "Tap the screen to jump!",
-        storyboard.localized.get("TutorialStep2") or "Pick up power-ups to use against opponents.",
-        storyboard.localized.get("TutorialStep3") or "Reach the finish line first to win!",
-        storyboard.localized.get("TutorialStep4") or "Earn coins to buy hats and accessories.",
-        storyboard.localized.get("TutorialStep5") or "Play with friends in Custom Play!",
-    }
-
-    instructionText = display.newText({
-        text = tutorialTexts[1],
-        x = display.contentCenterX,
-        y = display.contentCenterY - 10,
-        font = font,
-        fontSize = fontSize,
-        width = display.contentWidth * 0.7,
-        align = "center",
-    })
-    instructionText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(instructionText)
-
-    ---------------------------------------------------------------------------
-    -- Step indicator
-    ---------------------------------------------------------------------------
-    local stepText = display.newText({
-        text = "1 / " .. MAX_STEPS,
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.82,
-        font = font,
-        fontSize = fontSize * 0.85,
-    })
-    stepText:setFillColor(textColor[1], textColor[2], textColor[3], 0.7)
-    view:insert(stepText)
-
-    ---------------------------------------------------------------------------
-    -- Next / Done button
-    ---------------------------------------------------------------------------
-    local function updateTutorial()
-        instructionText.text = tutorialTexts[tutorialStep] or ""
-        stepText.text = tostring(tutorialStep) .. " / " .. MAX_STEPS
+  addText(storyboard.localized.get("PowerUps"), 50, W * 3, H * 0.15)
+  addImage("images/gui/tutorial/powerUps.png", 280, 200, W * 3 - 82, H * 0.55)
+  local descriptions = {
+    "TrapDesc", "LightningDesc", "SawbladeDesc", "BoxDesc", "NinjaSwordDesc",
+    "MagnetDesc", "BoostDesc", "ShieldDesc", "HeartDesc", "JumpBoostDesc",
+  }
+  for i, key in ipairs(descriptions) do
+    local label = addText(storyboard.localized.get(key), fontSize * 2, 0, 0)
+    label.anchorX, label.anchorY = 0, 0.5
+    if i < 6 then
+      label.x = W * 3 - 168
+      label.y = H * 0.16 + H * 0.13 * i
+    else
+      label.x = W * 3 + 72
+      label.y = H * 0.16 + H * 0.13 * (i - 5)
     end
+  end
+  view:insert(pages)
+  pages.y = -H * 0.1
 
-    local function onNextTap(event)
-        if tutorialStep < MAX_STEPS then
-            tutorialStep = tutorialStep + 1
-            updateTutorial()
+  local ready = true
+  local page = 1
+  nextButton = gui.newButton({
+    image = "images/gui/button/next.png",
+    width = storyboard.gameDataTable.backButton[1], height = storyboard.gameDataTable.backButton[2],
+    x = display.contentWidth - 50, y = storyboard.gameDataTable.backButton[4], displayGroup = view,
+    onRelease = function()
+      if ready then
+        if page < 4 then
+          ready = false
+          transition.to(pages, { time = 300, x = pages.x - W, onComplete = function() ready = true end })
+          page = page + 1
         else
-            -- Tutorial complete
-            storyboard.gotoScene("scenes.mainMenu")
-            storyboard.purgeScene("scenes.tutorial")
+          storyboard.gotoScene("scenes.settings")
+          storyboard.purgeScene("scenes.tutorial")
         end
-        return true
-    end
-
-    nextButton = gui.newButton({
-        image = "images/gui/button/blank.png",
-        text = storyboard.localized.get("Next") or "Next",
-        width = 120, height = 40,
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.9,
-        onRelease = onNextTap,
-    })
-    view:insert(nextButton.displayGroup or nextButton)
-
-    ---------------------------------------------------------------------------
-    -- Back / Skip button
-    ---------------------------------------------------------------------------
-    local function onBackTap(event)
-        storyboard.gotoScene("scenes.mainMenu")
-        storyboard.purgeScene("scenes.tutorial")
-        return true
-    end
-
-    backButton = gui.newButton({
-        image = "images/gui/button/smallHome.png",
-        width = 35, height = 35,
-        x = 26, y = 26,
-        onRelease = onBackTap,
-    })
-    view:insert(backButton.displayGroup or backButton)
-
-    ---------------------------------------------------------------------------
-    -- Key listener (Android back)
-    ---------------------------------------------------------------------------
-    keyListener = function(event)
-        if event.keyName == "back" and event.phase == "up" then
-            onBackTap(event)
-            return true
-        end
-    end
-    Runtime:addEventListener("key", keyListener)
+      end
+    end,
+  })
 end
 
----------------------------------------------------------------------------------
--- ENTER SCENE
----------------------------------------------------------------------------------
-function scene:enterScene(event)
+function scene:enterScene()
+  local backKeyEnabled, backPressed = false, false
+
+  function onFrame()
+    if backPressed then
+      backPressed = false
+      backKeyEnabled = false
+      storyboard.gotoScene("scenes.settings")
+      storyboard.purgeScene("scenes.tutorial")
+    end
+  end
+
+  function onKey(event)
+    if event.phase == "up" and event.keyName == "back" then
+      if backKeyEnabled then
+        backPressed = true
+      end
+      return true
+    end
+    return false
+  end
+
+  timer.performWithDelay(200, function()
+    if storyboard.getCurrentSceneName() == "scenes.tutorial" then
+      nextButton.addListener()
+      backKeyEnabled = true
+    end
+  end, 1)
+  Runtime:addEventListener("key", onKey)
+  Runtime:addEventListener("enterFrame", onFrame)
+  pages.x = display.contentWidth * 0.5
 end
 
----------------------------------------------------------------------------------
--- EXIT SCENE
----------------------------------------------------------------------------------
-function scene:exitScene(event)
-    Runtime:removeEventListener("key", keyListener)
+function scene:exitScene()
+  nextButton.removeListener()
+  Runtime:removeEventListener("key", onKey)
+  Runtime:removeEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- DESTROY SCENE
----------------------------------------------------------------------------------
-function scene:destroyScene(event)
-    background = nil
-    backButton = nil
-    nextButton = nil
-    instructionText = nil
-    tutorialImages = {}
-    enterFrameListener = nil
-    keyListener = nil
+function scene:destroyScene()
+  nextButton, pages = nil, nil
 end
 
 scene:addEventListener("createScene", scene)

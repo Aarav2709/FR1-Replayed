@@ -1,865 +1,591 @@
--- storyboard.lua — Scene management module
--- Reconstructed from decompiled Corona SDK storyboard
+-- scene manager.
 
 local storyboard = {}
 
--- Display stage
 local stage = display.newGroup()
 
--- State tracking
-local currentSceneName = nil
-local currentSceneView = nil
-local previousSceneName = nil
-local overlayScene = nil
-local touchBlocker = nil
-local modalRect = nil
+local currentSceneName
+local currentView
+local previousSceneName
+local overlayScene
+local touchBlocker
+local modalRect
 
--- Loaded scene modules (LRU order: oldest at index 1)
 storyboard.loadedSceneMods = {}
 storyboard.scenes = {}
 storyboard.stage = stage
 storyboard.disableAutoPurge = false
 storyboard.purgeOnSceneChange = false
-storyboard.isDebug = false
 
--- Cache screen dimensions
-local contentWidth = display.contentWidth
-local contentHeight = display.contentHeight
-local screenOriginX = display.screenOriginX
-local screenOriginY = display.screenOriginY
-local fullWidth = contentWidth - screenOriginX * 2
-local fullHeight = contentHeight - screenOriginY * 2
-local rightEdge = contentWidth - screenOriginX
-local bottomEdge = contentHeight - screenOriginY
-local centerX = contentWidth / 2
-local centerY = contentHeight / 2
-
--- Check graphics v1 compatibility
-local isV1Compatible = false
-local gpv = system.getInfo("graphicsPipelineVersion")
-if gpv ~= "1.0" then
-    local gc = display.getDefault("graphicsCompatibility")
-    isV1Compatible = (1 == gc)
+local isGraphicsV1 = false
+if system.getInfo("graphicsPipelineVersion") ~= "1.0" then
+  isGraphicsV1 = display.getDefault("graphicsCompatibility") == 1
 end
 
---------------------------------------------------------------------------------
--- Transition effect definitions
---------------------------------------------------------------------------------
+local W, H = display.contentWidth, display.contentHeight
+local screenLeft, screenTop = display.screenOriginX, display.screenOriginY
+local screenWidth = W - screenLeft * 2
+local screenHeight = H - screenTop * 2
+
+local slide = { transition = easing.outQuad }
+local function slideEffect(fromX, fromY, toX, toY)
+  return {
+    from = { xStart = 0, yStart = 0, xEnd = fromX, yEnd = fromY, transition = slide.transition },
+    to = { xStart = toX, yStart = toY, xEnd = 0, yEnd = 0, transition = slide.transition },
+    concurrent = true,
+    sceneAbove = true,
+  }
+end
 
 local effectList = {
-    fade = {
-        from = { alphaStart = 1, alphaEnd = 0 },
-        to = { alphaStart = 0, alphaEnd = 1 },
-    },
-    crossFade = {
-        from = { alphaStart = 1, alphaEnd = 0 },
-        to = { alphaStart = 0, alphaEnd = 1 },
-        concurrent = true,
-    },
-    zoomOutIn = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 0.001, yScaleEnd = 0.001,
-            xStart = 0, yStart = 0,
-            xEnd = centerX, yEnd = centerY,
-        },
-        to = {
-            xScaleStart = 0.001, yScaleStart = 0.001,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = centerX, yStart = centerY,
-            xEnd = 0, yEnd = 0,
-        },
-        hideOnOut = true,
-    },
-    zoomOutInFade = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 0.001, yScaleEnd = 0.001,
-            xStart = 0, yStart = 0,
-            xEnd = centerX, yEnd = centerY,
-            alphaStart = 1, alphaEnd = 0,
-        },
-        to = {
-            xScaleStart = 0.001, yScaleStart = 0.001,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = centerX, yStart = centerY,
-            xEnd = 0, yEnd = 0,
-            alphaStart = 0, alphaEnd = 1,
-        },
-        hideOnOut = true,
-    },
-    zoomInOut = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 2, yScaleEnd = 2,
-            xStart = 0, yStart = 0,
-            xEnd = -centerX, yEnd = -centerY,
-        },
-        to = {
-            xScaleStart = 2, yScaleStart = 2,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = -centerX, yStart = -centerY,
-            xEnd = 0, yEnd = 0,
-        },
-        hideOnOut = true,
-    },
-    zoomInOutFade = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 2, yScaleEnd = 2,
-            xStart = 0, yStart = 0,
-            xEnd = -centerX, yEnd = -centerY,
-            alphaStart = 1, alphaEnd = 0,
-        },
-        to = {
-            xScaleStart = 2, yScaleStart = 2,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = -centerX, yStart = -centerY,
-            xEnd = 0, yEnd = 0,
-            alphaStart = 0, alphaEnd = 1,
-        },
-        hideOnOut = true,
-    },
-    flip = {
-        from = {
-            xScaleStart = 1, xScaleEnd = 0.001,
-            xStart = 0, xEnd = centerX,
-        },
-        to = {
-            xScaleStart = 0.001, xScaleEnd = 1,
-            xStart = centerX, xEnd = 0,
-        },
-    },
-    flipFadeOutIn = {
-        from = {
-            xScaleStart = 1, xScaleEnd = 0.001,
-            xStart = 0, xEnd = centerX,
-            alphaStart = 1, alphaEnd = 0,
-        },
-        to = {
-            xScaleStart = 0.001, xScaleEnd = 1,
-            xStart = centerX, xEnd = 0,
-            alphaStart = 0, alphaEnd = 1,
-        },
-    },
-    zoomOutInRotate = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 0.001, yScaleEnd = 0.001,
-            xStart = 0, yStart = 0,
-            xEnd = centerX, yEnd = centerY,
-            rotationStart = 0, rotationEnd = -360,
-        },
-        to = {
-            xScaleStart = 0.001, yScaleStart = 0.001,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = centerX, yStart = centerY,
-            xEnd = 0, yEnd = 0,
-            rotationStart = -360, rotationEnd = 0,
-        },
-        hideOnOut = true,
-    },
-    zoomOutInFadeRotate = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 0.001, yScaleEnd = 0.001,
-            xStart = 0, yStart = 0,
-            xEnd = centerX, yEnd = centerY,
-            alphaStart = 1, alphaEnd = 0,
-            rotationStart = 0, rotationEnd = -360,
-        },
-        to = {
-            xScaleStart = 0.001, yScaleStart = 0.001,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = centerX, yStart = centerY,
-            xEnd = 0, yEnd = 0,
-            alphaStart = 0, alphaEnd = 1,
-            rotationStart = -360, rotationEnd = 0,
-        },
-        hideOnOut = true,
-    },
-    zoomInOutRotate = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 2, yScaleEnd = 2,
-            xStart = 0, yStart = 0,
-            xEnd = -centerX, yEnd = -centerY,
-            rotationStart = 0, rotationEnd = -360,
-        },
-        to = {
-            xScaleStart = 2, yScaleStart = 2,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = -centerX, yStart = -centerY,
-            xEnd = 0, yEnd = 0,
-            rotationStart = -360, rotationEnd = 0,
-        },
-        hideOnOut = true,
-    },
-    zoomInOutFadeRotate = {
-        from = {
-            xScaleStart = 1, yScaleStart = 1,
-            xScaleEnd = 2, yScaleEnd = 2,
-            xStart = 0, yStart = 0,
-            xEnd = -centerX, yEnd = -centerY,
-            alphaStart = 1, alphaEnd = 0,
-            rotationStart = 0, rotationEnd = -360,
-        },
-        to = {
-            xScaleStart = 2, yScaleStart = 2,
-            xScaleEnd = 1, yScaleEnd = 1,
-            xStart = -centerX, yStart = -centerY,
-            xEnd = 0, yEnd = 0,
-            alphaStart = 0, alphaEnd = 1,
-            rotationStart = -360, rotationEnd = 0,
-        },
-        hideOnOut = true,
-    },
-    fromRight = {
-        from = { xStart = 0, yStart = 0, xEnd = 0, yEnd = 0 },
-        to = { xStart = contentWidth, yStart = 0, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    fromLeft = {
-        from = { xStart = 0, yStart = 0, xEnd = 0, yEnd = 0 },
-        to = { xStart = -contentWidth, yStart = 0, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    fromTop = {
-        from = { xStart = 0, yStart = 0, xEnd = 0, yEnd = 0 },
-        to = { xStart = 0, yStart = -contentHeight, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    fromBottom = {
-        from = { xStart = 0, yStart = 0, xEnd = 0, yEnd = 0 },
-        to = { xStart = 0, yStart = contentHeight, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    slideLeft = {
-        from = { xStart = 0, yStart = 0, xEnd = -contentWidth, yEnd = 0, transition = easing.outQuad },
-        to = { xStart = contentWidth, yStart = 0, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    slideRight = {
-        from = { xStart = 0, yStart = 0, xEnd = contentWidth, yEnd = 0, transition = easing.outQuad },
-        to = { xStart = -contentWidth, yStart = 0, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    slideDown = {
-        from = { xStart = 0, yStart = 0, xEnd = 0, yEnd = contentHeight, transition = easing.outQuad },
-        to = { xStart = 0, yStart = -contentHeight, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
-    slideUp = {
-        from = { xStart = 0, yStart = 0, xEnd = 0, yEnd = -contentHeight, transition = easing.outQuad },
-        to = { xStart = 0, yStart = contentHeight, xEnd = 0, yEnd = 0, transition = easing.outQuad },
-        concurrent = true, sceneAbove = true,
-    },
+  fade = {
+    from = { alphaStart = 1, alphaEnd = 0 },
+    to = { alphaStart = 0, alphaEnd = 1 },
+  },
+  crossFade = {
+    from = { alphaStart = 1, alphaEnd = 0 },
+    to = { alphaStart = 0, alphaEnd = 1 },
+    concurrent = true,
+  },
+  zoomOutIn = {
+    from = { xEnd = W * 0.5, yEnd = H * 0.5, xScaleEnd = 0.001, yScaleEnd = 0.001 },
+    to = { xScaleStart = 0.001, yScaleStart = 0.001, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = W * 0.5, yStart = H * 0.5, xEnd = 0, yEnd = 0 },
+    hideOnOut = true,
+  },
+  zoomOutInFade = {
+    from = { xEnd = W * 0.5, yEnd = H * 0.5, xScaleEnd = 0.001, yScaleEnd = 0.001, alphaStart = 1, alphaEnd = 0 },
+    to = { xScaleStart = 0.001, yScaleStart = 0.001, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = W * 0.5, yStart = H * 0.5, xEnd = 0, yEnd = 0, alphaStart = 0, alphaEnd = 1 },
+    hideOnOut = true,
+  },
+  zoomInOut = {
+    from = { xEnd = -W * 0.5, yEnd = -H * 0.5, xScaleEnd = 2, yScaleEnd = 2 },
+    to = { xScaleStart = 2, yScaleStart = 2, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = -W * 0.5, yStart = -H * 0.5, xEnd = 0, yEnd = 0 },
+    hideOnOut = true,
+  },
+  zoomInOutFade = {
+    from = { xEnd = -W * 0.5, yEnd = -H * 0.5, xScaleEnd = 2, yScaleEnd = 2, alphaStart = 1, alphaEnd = 0 },
+    to = { xScaleStart = 2, yScaleStart = 2, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = -W * 0.5, yStart = -H * 0.5, xEnd = 0, yEnd = 0, alphaStart = 0, alphaEnd = 1 },
+    hideOnOut = true,
+  },
+  flip = {
+    from = { xEnd = W * 0.5, xScaleEnd = 0.001 },
+    to = { xScaleStart = 0.001, xScaleEnd = 1, xStart = W * 0.5, xEnd = 0 },
+  },
+  flipFadeOutIn = {
+    from = { xEnd = W * 0.5, xScaleEnd = 0.001, alphaStart = 1, alphaEnd = 0 },
+    to = { xScaleStart = 0.001, xScaleEnd = 1, xStart = W * 0.5, xEnd = 0, alphaStart = 0, alphaEnd = 1 },
+  },
+  zoomOutInRotate = {
+    from = { xEnd = W * 0.5, yEnd = H * 0.5, xScaleEnd = 0.001, yScaleEnd = 0.001, rotationStart = 0, rotationEnd = -360 },
+    to = { xScaleStart = 0.001, yScaleStart = 0.001, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = W * 0.5, yStart = H * 0.5, xEnd = 0, yEnd = 0, rotationStart = -360, rotationEnd = 0 },
+    hideOnOut = true,
+  },
+  zoomOutInFadeRotate = {
+    from = { xEnd = W * 0.5, yEnd = H * 0.5, xScaleEnd = 0.001, yScaleEnd = 0.001,
+             rotationStart = 0, rotationEnd = -360, alphaStart = 1, alphaEnd = 0 },
+    to = { xScaleStart = 0.001, yScaleStart = 0.001, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = W * 0.5, yStart = H * 0.5, xEnd = 0, yEnd = 0,
+           rotationStart = -360, rotationEnd = 0, alphaStart = 0, alphaEnd = 1 },
+    hideOnOut = true,
+  },
+  zoomInOutRotate = {
+    from = { xEnd = W * 0.5, yEnd = H * 0.5, xScaleEnd = 2, yScaleEnd = 2, rotationStart = 0, rotationEnd = -360 },
+    to = { xScaleStart = 2, yScaleStart = 2, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = W * 0.5, yStart = H * 0.5, xEnd = 0, yEnd = 0, rotationStart = -360, rotationEnd = 0 },
+    hideOnOut = true,
+  },
+  zoomInOutFadeRotate = {
+    from = { xEnd = W * 0.5, yEnd = H * 0.5, xScaleEnd = 2, yScaleEnd = 2,
+             rotationStart = 0, rotationEnd = -360, alphaStart = 1, alphaEnd = 0 },
+    to = { xScaleStart = 2, yScaleStart = 2, xScaleEnd = 1, yScaleEnd = 1,
+           xStart = W * 0.5, yStart = H * 0.5, xEnd = 0, yEnd = 0,
+           rotationStart = -360, rotationEnd = 0, alphaStart = 0, alphaEnd = 1 },
+    hideOnOut = true,
+  },
+  fromRight = slideEffect(0, 0, W, 0),
+  fromLeft = slideEffect(0, 0, -W, 0),
+  fromTop = slideEffect(0, 0, 0, -H),
+  fromBottom = slideEffect(0, 0, 0, H),
+  slideLeft = slideEffect(-W, 0, W, 0),
+  slideRight = slideEffect(W, 0, -W, 0),
+  slideDown = slideEffect(0, H, 0, -H),
+  slideUp = slideEffect(0, -H, 0, H),
 }
-
 storyboard.effectList = effectList
 
---------------------------------------------------------------------------------
--- Private helper functions
---------------------------------------------------------------------------------
-
-local function debugPrint(message)
-    if storyboard.isDebug then
-        print("STORYBOARD > " .. tostring(message))
+local function indexOfLoaded(sceneName)
+  for i = 1, #storyboard.loadedSceneMods do
+    if storyboard.loadedSceneMods[i] == sceneName then
+      return i
     end
+  end
 end
 
-local function findSceneModIndex(sceneName)
-    for i, name in ipairs(storyboard.loadedSceneMods) do
-        if name == sceneName then
-            return i
-        end
+local function removeFromLoaded(sceneName)
+  local i = indexOfLoaded(sceneName)
+  if i then
+    table.remove(storyboard.loadedSceneMods, i)
+  end
+end
+
+local function markLoaded(sceneName)
+  removeFromLoaded(sceneName)
+  storyboard.loadedSceneMods[#storyboard.loadedSceneMods + 1] = sceneName
+end
+
+local function exitCurrentScene(view, newSceneName, noEffect)
+  if not view then
+    return
+  end
+  local outgoing
+  if view.numChildren and view.numChildren > 0 and not noEffect then
+    outgoing = view
+  end
+  for i = view.numChildren, 1, -1 do
+    if view[i].enterFrame then
+      Runtime:removeEventListener("enterFrame", view[i])
     end
-    return nil
+  end
+  if currentSceneName and storyboard.scenes[currentSceneName] then
+    storyboard.scenes[currentSceneName]:dispatchEvent({ name = "exitScene" })
+  end
+  currentSceneName = newSceneName
+  if outgoing then
+    stage:insert(outgoing)
+    return outgoing
+  end
 end
 
-local function removeFromLoadedMods(sceneName)
-    local index = findSceneModIndex(sceneName)
-    if index then
-        table.remove(storyboard.loadedSceneMods, index)
-    end
-end
-
-local function touchToEndOfLoadedMods(sceneName)
-    removeFromLoadedMods(sceneName)
-    storyboard.loadedSceneMods[#storyboard.loadedSceneMods + 1] = sceneName
-end
-
-local function createTouchBlocker()
-    local blocker = display.newRect(screenOriginX, screenOriginY, fullWidth, fullHeight)
-    blocker:setFillColor(0, 0, 0, 0)
-    blocker.isVisible = false
-    blocker.isHitTestable = true
-    if not isV1Compatible then
-        blocker.anchorX = 0
-        blocker.anchorY = 0
-    end
-    blocker:addEventListener("touch", function() return true end)
-    blocker:addEventListener("tap", function() return true end)
-    return blocker
-end
-
-local function cleanupPreviousScene(sceneView, newSceneName, noEffect)
-    if not sceneView then return nil end
-
-    if noEffect and sceneView then
-        sceneView.isVisible = false
-    end
-
-    -- Remove enterFrame listeners from children
-    if sceneView.numChildren then
-        for i = sceneView.numChildren, 1, -1 do
-            local child = sceneView[i]
-            if child then
-                Runtime:removeEventListener("enterFrame", child)
-            end
-        end
-    end
-
-    -- Dispatch exitScene on current scene
-    if currentSceneName then
-        local scene = storyboard.scenes[currentSceneName]
-        if scene then
-            scene:dispatchEvent({ name = "exitScene" })
-            debugPrint("exitScene dispatched for: " .. currentSceneName)
-        end
-    end
-
-    currentSceneName = newSceneName
-    return sceneView
-end
-
---------------------------------------------------------------------------------
--- Transition helper
---------------------------------------------------------------------------------
-
-local function applyEffectStartProps(view, effectDef)
-    if not effectDef then return end
-    if effectDef.xStart then view.x = effectDef.xStart end
-    if effectDef.yStart then view.y = effectDef.yStart end
-    if effectDef.alphaStart then view.alpha = effectDef.alphaStart end
-    if effectDef.xScaleStart then view.xScale = effectDef.xScaleStart end
-    if effectDef.yScaleStart then view.yScale = effectDef.yScaleStart end
-    if effectDef.rotationStart then view.rotation = effectDef.rotationStart end
-end
-
-local function buildTransitionParams(effectDef, time, onComplete)
-    local params = { time = time }
-    if effectDef.xEnd then params.x = effectDef.xEnd end
-    if effectDef.yEnd then params.y = effectDef.yEnd end
-    if effectDef.alphaEnd then params.alpha = effectDef.alphaEnd end
-    if effectDef.xScaleEnd then params.xScale = effectDef.xScaleEnd end
-    if effectDef.yScaleEnd then params.yScale = effectDef.yScaleEnd end
-    if effectDef.rotationEnd then params.rotation = effectDef.rotationEnd end
-    if effectDef.transition then params.transition = effectDef.transition end
-    if onComplete then params.onComplete = onComplete end
-    return params
-end
-
---------------------------------------------------------------------------------
--- Public API
---------------------------------------------------------------------------------
-
-function storyboard.newScene(moduleName)
-    local scene = Runtime._super:new()
-    if moduleName and not storyboard.scenes[moduleName] then
-        storyboard.scenes[moduleName] = scene
-    end
-    return scene
-end
-
-function storyboard.getCurrentSceneName()
-    return currentSceneName
-end
-
-function storyboard.getPrevious()
-    return previousSceneName
-end
-
-function storyboard.getScene(sceneName)
-    local scene = storyboard.scenes[sceneName]
-    if not scene then
-        debugPrint("Scene not found: " .. tostring(sceneName))
-    end
-    return scene
-end
-
-function storyboard.printMemUsage()
-    if not storyboard.isDebug then return nil end
-    collectgarbage()
-    local sysMem = collectgarbage("count") / 1024
-    local texMem = system.getInfo("textureMemoryUsed") / (1024 * 1024)
-    print(string.format("STORYBOARD > System memory: %.2f MB | Texture memory: %.2f MB", sysMem, texMem))
+local function newTouchBlocker()
+  local function swallow()
     return true
+  end
+  local rect = display.newRect(screenLeft, screenTop, screenWidth, screenHeight)
+  rect:setFillColor(0)
+  rect.isVisible = false
+  rect.isHitTestable = true
+  rect:addEventListener("touch", swallow)
+  rect:addEventListener("tap", swallow)
+  if not isGraphicsV1 then
+    rect.anchorX = 0
+    rect.anchorY = 0
+  end
+  return rect
+end
+
+local function applyStart(view, fx)
+  view.x = fx.xStart or 0
+  view.y = fx.yStart or 0
+  view.alpha = fx.alphaStart or 1
+  view.xScale = fx.xScaleStart or 1
+  view.yScale = fx.yScaleStart or 1
+  view.rotation = fx.rotationStart or 0
+end
+
+local function loadSceneModule(sceneName)
+  local scene = require(sceneName)
+  if type(scene) == "boolean" then
+    error("Attempting to load scene from invalid scene module (" .. sceneName ..
+      ".lua). Did you forget to return the scene object at the end of the scene module? (e.g. 'return scene')")
+  end
+  storyboard.scenes[sceneName] = scene
+  return scene
+end
+
+function storyboard.newScene(sceneName)
+  local scene = Runtime._super:new()
+  if sceneName and not storyboard.scenes[sceneName] then
+    storyboard.scenes[sceneName] = scene
+  end
+  return scene
 end
 
 function storyboard.purgeScene(sceneName)
-    local scene = storyboard.scenes[sceneName]
-    if scene and scene.view then
-        scene:dispatchEvent({ name = "destroyScene" })
-        removeFromLoadedMods(sceneName)
-        display.remove(scene.view)
-        scene.view = nil
-        collectgarbage("collect")
-        debugPrint("purgeScene: " .. sceneName)
-    else
-        debugPrint("purgeScene: scene not found or has no view — " .. tostring(sceneName))
+  local scene = storyboard.scenes[sceneName]
+  if scene and scene.view then
+    scene:dispatchEvent({ name = "destroyScene" })
+    removeFromLoaded(sceneName)
+    if scene.view then
+      display.remove(scene.view)
+      scene.view = nil
+      collectgarbage("collect")
     end
-end
-
-function storyboard.purgeAll()
-    local purgeCount = 0
-    for i = #storyboard.loadedSceneMods, 1, -1 do
-        local name = storyboard.loadedSceneMods[i]
-        if name ~= currentSceneName then
-            storyboard.purgeScene(name)
-            purgeCount = purgeCount + 1
-        end
-    end
-    debugPrint("purgeAll: purged " .. purgeCount .. " scenes")
+  end
 end
 
 function storyboard.removeScene(sceneName)
-    storyboard.purgeScene(sceneName)
-    storyboard.scenes[sceneName] = nil
-    package.loaded[sceneName] = nil
+  storyboard.purgeScene(sceneName)
+  storyboard.scenes[sceneName] = nil
+  package.loaded[sceneName] = nil
+end
+
+function storyboard.purgeAll()
+  local purged = 0
+  for i = #storyboard.loadedSceneMods, 1, -1 do
+    local name = storyboard.loadedSceneMods[i]
+    if name ~= currentSceneName then
+      purged = purged + 1
+      storyboard.purgeScene(name)
+    end
+  end
 end
 
 function storyboard.removeAll()
-    storyboard.hideOverlay()
-    for i = #storyboard.loadedSceneMods, 1, -1 do
-        local name = storyboard.loadedSceneMods[i]
-        if name ~= currentSceneName then
-            storyboard.removeScene(name)
-        end
+  storyboard.hideOverlay()
+  for i = #storyboard.loadedSceneMods, 1, -1 do
+    local name = storyboard.loadedSceneMods[i]
+    if name ~= currentSceneName then
+      storyboard.removeScene(name)
     end
+  end
 end
 
-function storyboard.loadScene(sceneName, dontLoadView, params)
-    if type(dontLoadView) ~= "boolean" then
-        params = dontLoadView
-        dontLoadView = false
+function storyboard.getPrevious()
+  return previousSceneName
+end
+
+function storyboard.getScene(sceneName)
+  local scene = storyboard.scenes[sceneName]
+  return scene
+end
+
+function storyboard.getCurrentSceneName()
+  return currentSceneName
+end
+
+local function transitionIn(view, effect, time, blocker, outgoing, params)
+  local function onComplete()
+    blocker.isHitTestable = false
+    if outgoing then
+      outgoing.isVisible = false
     end
+    if currentSceneName and storyboard.scenes[currentSceneName] then
+      markLoaded(currentSceneName)
+      storyboard.scenes[currentSceneName]:dispatchEvent({ name = "enterScene", params = params })
+      if storyboard.purgeOnSceneChange then
+        storyboard.purgeAll()
+      end
+    end
+  end
 
-    local scene = storyboard.scenes[sceneName]
+  local previous = storyboard.getPrevious()
+  if previous and storyboard.scenes[previous] then
+    storyboard.scenes[previous]:dispatchEvent({ name = "didExitScene" })
+  end
+  if storyboard.scenes[currentSceneName] then
+    storyboard.scenes[currentSceneName]:dispatchEvent({ name = "willEnterScene", params = params })
+  end
+  if outgoing and effect.hideOnOut then
+    outgoing.isVisible = false
+  end
+  view.isVisible = true
+  transition.to(view, {
+    x = effect.to.xEnd, y = effect.to.yEnd, alpha = effect.to.alphaEnd,
+    xScale = effect.to.xScaleEnd, yScale = effect.to.yScaleEnd, rotation = effect.to.rotationEnd,
+    time = time or 500,
+    transition = effect.to.transition,
+    onComplete = onComplete,
+  })
+end
 
-    if scene then
-        -- Scene already exists
-        if not scene.view and not dontLoadView then
-            scene.view = display.newGroup()
-            scene:dispatchEvent({ name = "createScene", params = params })
-            touchToEndOfLoadedMods(sceneName)
-        end
+function storyboard.hideOverlay(purgeOnly, effect, time, extra)
+  display.remove(modalRect)
+  modalRect = nil
+  local overlay = overlayScene
+  overlayScene = nil
+  if not overlay then
+    return
+  end
+  if purgeOnly == storyboard then
+    purgeOnly, effect, time = effect, time, extra
+  end
+  if type(purgeOnly) == "string" then
+    time = effect or time
+    effect = purgeOnly
+    purgeOnly = nil
+  end
+
+  local function finish()
+    overlay:dispatchEvent({ name = "didExitScene" })
+    if indexOfLoaded(overlay.name) then
+      purgeOnly = true
+    end
+    if purgeOnly then
+      storyboard.purgeScene(overlay.name)
     else
-        -- Load new scene
-        local ok, result = pcall(require, sceneName)
-        if ok then
-            scene = storyboard.scenes[sceneName] or result
-            if not storyboard.scenes[sceneName] then
-                storyboard.scenes[sceneName] = scene
-            end
-            if not dontLoadView then
-                if not scene.view then
-                    scene.view = display.newGroup()
-                end
-                scene:dispatchEvent({ name = "createScene", params = params })
-                touchToEndOfLoadedMods(sceneName)
-            end
-        else
-            print("STORYBOARD ERROR: Failed to load scene '" .. sceneName .. "': " .. tostring(result))
-            return nil
-        end
+      storyboard.removeScene(overlay.name)
     end
-
-    if not dontLoadView and scene and scene.view then
-        scene.view.isVisible = false
-        stage:insert(1, scene.view)
-    end
-
-    return scene
-end
-
-function storyboard.gotoScene(...)
-    local args = { ... }
-    local sceneName, effect, effectTime, params
-
-    -- Handle colon syntax detection
-    if type(args[1]) == "table" and args[1] == storyboard then
-        debugPrint("WARNING: gotoScene called with colon syntax. Use dot syntax.")
-        table.remove(args, 1)
-    end
-
-    sceneName = args[1]
-
-    if type(args[2]) == "table" then
-        local options = args[2]
-        effect = options.effect
-        effectTime = options.time
-        params = options.params
-    elseif type(args[2]) == "string" then
-        effect = args[2]
-        effectTime = args[3]
-    end
-
-    local noEffect = (effect == nil or effect == "")
-    if not noEffect and not effectTime then
-        effectTime = 500
-    end
-    if noEffect then
-        effectTime = 0
-    end
-
-    -- Hide any overlay
-    storyboard.hideOverlay()
-
-    -- Same scene: reload
-    if sceneName == currentSceneName then
-        storyboard.reloadScene()
-        return
-    end
-
-    -- Track previous scene
     if currentSceneName then
-        previousSceneName = currentSceneName
+      storyboard.scenes[currentSceneName]:dispatchEvent({ name = "overlayEnded", sceneName = overlay.name })
     end
+    touchBlocker.isHitTestable = false
+  end
 
-    -- Get effect definition
-    local effectDef = effectList[effect]
-
-    -- Cleanup previous scene
-    local fromView = cleanupPreviousScene(currentSceneView, sceneName, noEffect)
-
-    -- Create/get touch blocker
-    if not touchBlocker then
-        touchBlocker = createTouchBlocker()
-        stage:insert(touchBlocker)
-    end
-    touchBlocker.isHitTestable = true
-
-    -- Load target scene
-    local scene = storyboard.scenes[sceneName]
-    if scene then
-        if not scene.view then
-            scene.view = display.newGroup()
-            scene:dispatchEvent({ name = "createScene", params = params })
-        end
-    else
-        local ok, result = pcall(require, sceneName)
-        if ok then
-            scene = storyboard.scenes[sceneName] or result
-            if not storyboard.scenes[sceneName] then
-                storyboard.scenes[sceneName] = scene
-            end
-            if not scene.view then
-                scene.view = display.newGroup()
-            end
-            scene:dispatchEvent({ name = "createScene", params = params })
-        else
-            print("STORYBOARD ERROR: Failed to load scene '" .. sceneName .. "': " .. tostring(result))
-            touchBlocker.isHitTestable = false
-            return
-        end
-    end
-
-    if type(scene) == "boolean" then
-        print("STORYBOARD ERROR: Scene module '" .. sceneName .. "' returned boolean. Did you forget 'return scene'?")
-        touchBlocker.isHitTestable = false
-        return
-    end
-
-    local toView = scene.view
-    currentSceneView = toView
-
-    -- Insert into stage
-    if effectDef and effectDef.sceneAbove then
-        stage:insert(toView)
-    else
-        stage:insert(1, toView)
-    end
-
-    -- Keep touch blocker on top
-    stage:insert(touchBlocker)
-
-    toView.isVisible = false
-
-    if not noEffect and effectDef then
-        -- Apply start properties to incoming scene
-        applyEffectStartProps(toView, effectDef.to)
-
-        -- Transition incoming scene
-        local function transitionIn()
-            -- Dispatch didExitScene on previous
-            if previousSceneName then
-                local prevScene = storyboard.scenes[previousSceneName]
-                if prevScene then
-                    prevScene:dispatchEvent({ name = "didExitScene" })
-                end
-            end
-
-            -- Dispatch willEnterScene on current
-            scene:dispatchEvent({ name = "willEnterScene", params = params })
-
-            local function onInComplete()
-                touchBlocker.isHitTestable = false
-                if fromView then
-                    fromView.isVisible = false
-                end
-                if currentSceneName and storyboard.scenes[currentSceneName] then
-                    touchToEndOfLoadedMods(currentSceneName)
-                    storyboard.scenes[currentSceneName]:dispatchEvent({ name = "enterScene", params = params })
-                end
-                if storyboard.purgeOnSceneChange then
-                    storyboard.purgeAll()
-                end
-                debugPrint("enterScene dispatched for: " .. tostring(currentSceneName))
-            end
-
-            if effectDef.hideOnOut and fromView then
-                fromView.isVisible = false
-            end
-
-            toView.isVisible = true
-            local inParams = buildTransitionParams(effectDef.to, effectTime, onInComplete)
-            transition.to(toView, inParams)
-        end
-
-        if effectDef.concurrent then
-            -- Run both transitions simultaneously
-            if fromView then
-                applyEffectStartProps(fromView, effectDef.from)
-                local outParams = buildTransitionParams(effectDef.from, effectTime)
-                transition.to(fromView, outParams)
-            end
-            transitionIn()
-        else
-            -- Sequential: outgoing first, then incoming
-            if fromView then
-                applyEffectStartProps(fromView, effectDef.from)
-                local outParams = buildTransitionParams(effectDef.from, effectTime, function()
-                    transitionIn()
-                end)
-                outParams.delay = 1
-                transition.to(fromView, outParams)
-            else
-                transitionIn()
-            end
-        end
-    else
-        -- No effect: immediate switch
-        toView.isVisible = true
-
-        if previousSceneName then
-            local prevScene = storyboard.scenes[previousSceneName]
-            if prevScene then
-                prevScene:dispatchEvent({ name = "didExitScene" })
-            end
-        end
-
-        scene:dispatchEvent({ name = "willEnterScene", params = params })
-        touchToEndOfLoadedMods(sceneName)
-        scene:dispatchEvent({ name = "enterScene", params = params })
-        touchBlocker.isHitTestable = false
-
-        if storyboard.purgeOnSceneChange then
-            storyboard.purgeAll()
-        end
-
-        debugPrint("gotoScene (no effect): " .. sceneName)
-    end
+  overlay:dispatchEvent({ name = "exitScene" })
+  if effect and effectList[effect] then
+    local from = effectList[effect].from
+    applyStart(overlay.view, from)
+    transition.to(overlay.view, {
+      x = from.xEnd, y = from.yEnd, alpha = from.alphaEnd,
+      xScale = from.xScaleEnd, yScale = from.yScaleEnd, rotation = from.rotationEnd,
+      time = time, transition = from.transition, onComplete = finish,
+    })
+  else
+    finish()
+  end
 end
 
 function storyboard.showOverlay(sceneName, options)
-    options = options or {}
-    local effect = options.effect
-    local effectTime = options.time or 500
-    local params = options.params
-    local isModal = options.isModal
+  storyboard.hideOverlay()
+  if sceneName == storyboard and type(options) == "string" then
+    sceneName, options = options, nil
+  end
+  options = options or {}
+  local effect = options.effect
+  local time = options.time or 500
+  local params = options.params
 
-    -- Hide any existing overlay
-    storyboard.hideOverlay()
-
-    -- Load overlay scene
-    local scene = storyboard.scenes[sceneName]
-    if not scene then
-        local ok, result = pcall(require, sceneName)
-        if ok then
-            scene = storyboard.scenes[sceneName] or result
-            if not storyboard.scenes[sceneName] then
-                storyboard.scenes[sceneName] = scene
-            end
-        else
-            print("STORYBOARD ERROR: Failed to load overlay scene '" .. sceneName .. "': " .. tostring(result))
-            return
-        end
-    end
-
+  local scene = storyboard.scenes[sceneName]
+  if scene then
     if not scene.view then
-        scene.view = display.newGroup()
-        scene:dispatchEvent({ name = "createScene", params = params })
+      scene.view = display.newGroup()
+      scene:dispatchEvent({ name = "createScene", params = params })
     end
+  else
+    scene = loadSceneModule(sceneName)
+    scene.view = scene.view or display.newGroup()
+    scene:dispatchEvent({ name = "createScene", params = params })
+  end
+  scene:dispatchEvent({ name = "willEnterScene", params = params })
 
-    overlayScene = scene
-    overlayScene.name = sceneName
-
-    -- Create modal blocker if needed
-    if isModal then
-        modalRect = display.newRect(centerX, centerY, fullWidth, fullHeight)
-        modalRect:setFillColor(0, 0, 0, 0)
-        modalRect.isVisible = false
-        modalRect.isHitTestable = true
-        modalRect:addEventListener("touch", function() return true end)
-        modalRect:addEventListener("tap", function() return true end)
-        stage:insert(modalRect)
+  local function entered()
+    scene:dispatchEvent({ name = "enterScene", params = params })
+    if currentSceneName then
+      storyboard.scenes[currentSceneName]:dispatchEvent({ name = "overlayBegan", sceneName = sceneName, params = params })
     end
+    touchBlocker.isHitTestable = false
+  end
 
-    -- Insert overlay into stage
-    stage:insert(scene.view)
+  if effect and effectList[effect] then
+    local to = effectList[effect].to
+    touchBlocker.isHitTestable = true
+    applyStart(scene.view, to)
+    scene.view.isVisible = true
+    transition.to(scene.view, {
+      x = to.xEnd, y = to.yEnd, alpha = to.alphaEnd,
+      xScale = to.xScaleEnd, yScale = to.yScaleEnd, rotation = to.rotationEnd,
+      time = time, transition = to.transition, onComplete = entered,
+    })
+  else
+    touchBlocker.isHitTestable = false
+    scene.isVisible = true
+    scene.view.x, scene.view.y = 0, 0
+    entered()
+  end
 
-    -- Dispatch willEnterScene
-    scene:dispatchEvent({ name = "willEnterScene", params = params })
+  overlayScene = scene
+  overlayScene.name = sceneName
 
-    local function onComplete()
-        scene:dispatchEvent({ name = "enterScene", params = params })
-        -- Dispatch overlayBegan on parent scene
-        if currentSceneName then
-            local parentScene = storyboard.scenes[currentSceneName]
-            if parentScene then
-                parentScene:dispatchEvent({ name = "overlayBegan", sceneName = sceneName, params = params })
-            end
-        end
-        if touchBlocker then
-            touchBlocker.isHitTestable = false
-        end
+  if options.isModal then
+    modalRect = display.newRect(screenLeft, screenTop, screenWidth, screenHeight)
+    modalRect.x = display.contentCenterX
+    modalRect.y = display.contentCenterY
+    if not isGraphicsV1 then
+      modalRect.anchorX = 0.5
+      modalRect.anchorY = 0.5
     end
-
-    local effectDef = effectList[effect]
-    if effect and effectDef then
-        if touchBlocker then
-            touchBlocker.isHitTestable = true
-            stage:insert(touchBlocker)
-        end
-        applyEffectStartProps(scene.view, effectDef.to)
-        scene.view.isVisible = true
-        local inParams = buildTransitionParams(effectDef.to, effectTime, onComplete)
-        transition.to(scene.view, inParams)
-    else
-        scene.view.isVisible = true
-        onComplete()
+    modalRect.isVisible = false
+    modalRect.isHitTestable = true
+    local function swallow()
+      return true
     end
-end
-
-function storyboard.hideOverlay(shouldPurgeOnly, effect, effectTime)
-    -- Remove modal rect
-    if modalRect then
-        display.remove(modalRect)
-        modalRect = nil
-    end
-
-    local overlay = overlayScene
-    overlayScene = nil
-
-    if not overlay then return end
-
-    -- Handle colon syntax
-    if type(shouldPurgeOnly) == "string" then
-        effectTime = effect
-        effect = shouldPurgeOnly
-        shouldPurgeOnly = nil
-    end
-
-    local function onComplete()
-        overlay:dispatchEvent({ name = "didExitScene" })
-
-        local overlayName = overlay.name
-        if overlayName then
-            if findSceneModIndex(overlayName) then
-                storyboard.purgeScene(overlayName)
-            else
-                storyboard.removeScene(overlayName)
-            end
-        end
-
-        -- Dispatch overlayEnded on parent scene
-        if currentSceneName then
-            local parentScene = storyboard.scenes[currentSceneName]
-            if parentScene then
-                parentScene:dispatchEvent({ name = "overlayEnded", sceneName = overlayName })
-            end
-        end
-
-        if touchBlocker then
-            touchBlocker.isHitTestable = false
-        end
-    end
-
-    overlay:dispatchEvent({ name = "exitScene" })
-
-    local effectDef = effectList[effect]
-    if effect and effectDef then
-        if touchBlocker then
-            touchBlocker.isHitTestable = true
-            stage:insert(touchBlocker)
-        end
-        applyEffectStartProps(overlay.view, effectDef.from)
-        local outParams = buildTransitionParams(effectDef.from, effectTime or 500, onComplete)
-        transition.to(overlay.view, outParams)
-    else
-        onComplete()
-    end
+    modalRect.touch = swallow
+    modalRect.tap = swallow
+    modalRect:addEventListener("touch")
+    modalRect:addEventListener("tap")
+    stage:insert(modalRect)
+  end
+  stage:insert(scene.view)
 end
 
 function storyboard.reloadScene()
-    if not currentSceneName then return end
-
-    storyboard.hideOverlay()
-
-    local scene = storyboard.scenes[currentSceneName]
-    if not scene then return end
-
-    scene:dispatchEvent({ name = "exitScene" })
-
-    timer.performWithDelay(1, function()
-        scene:dispatchEvent({ name = "didExitScene" })
-
-        timer.performWithDelay(1, function()
-            if not scene.view then
-                scene.view = display.newGroup()
-                scene:dispatchEvent({ name = "createScene" })
-                currentSceneView = scene.view
-                stage:insert(scene.view)
-            end
-
-            timer.performWithDelay(1, function()
-                scene:dispatchEvent({ name = "willEnterScene" })
-
-                timer.performWithDelay(1, function()
-                    scene:dispatchEvent({ name = "enterScene" })
-                end)
-            end)
+  if not currentSceneName then
+    return
+  end
+  storyboard.hideOverlay()
+  local scene = storyboard.getScene(currentSceneName)
+  if not scene then
+    return
+  end
+  local function nextFrame(fn)
+    return timer.performWithDelay(1, fn, 1)
+  end
+  scene:dispatchEvent({ name = "exitScene" })
+  nextFrame(function()
+    scene:dispatchEvent({ name = "didExitScene" })
+    nextFrame(function()
+      if not scene.view then
+        scene.view = display.newGroup()
+        scene:dispatchEvent({ name = "createScene" })
+        currentView = scene.view
+        stage:insert(currentView)
+      end
+      nextFrame(function()
+        scene:dispatchEvent({ name = "willEnterScene" })
+        nextFrame(function()
+          scene:dispatchEvent({ name = "enterScene" })
         end)
+      end)
     end)
+  end)
 end
 
---------------------------------------------------------------------------------
--- Memory warning handler
---------------------------------------------------------------------------------
+function storyboard.loadScene(sceneName, doNotLoadView, params)
+  if sceneName == storyboard then
+    error("You must use a dot (instead of a colon) when calling storyboard.loadScene()")
+  end
+  if doNotLoadView ~= nil and type(doNotLoadView) ~= "boolean" then
+    params = doNotLoadView
+  end
+  local scene = storyboard.scenes[sceneName]
+  if scene then
+    if not scene.view and not doNotLoadView then
+      scene.view = display.newGroup()
+      scene:dispatchEvent({ name = "createScene", params = params })
+      markLoaded(sceneName)
+    end
+  else
+    scene = loadSceneModule(sceneName)
+    if not doNotLoadView then
+      scene.view = scene.view or display.newGroup()
+      scene:dispatchEvent({ name = "createScene", params = params })
+      markLoaded(sceneName)
+    end
+  end
+  if not doNotLoadView then
+    scene.view.isVisible = false
+    stage:insert(1, scene.view)
+  end
+  return scene
+end
+
+function storyboard.gotoScene(...)
+  storyboard.hideOverlay()
+  local args = { ... }
+  local offset = 0
+  if args[1] == storyboard then
+    offset = 1
+  end
+  if type(args[1 + offset]) == "boolean" then
+    offset = offset + 1
+  end
+  local sceneName = args[1 + offset]
+  local params, effect, time
+  if type(args[2 + offset]) == "table" then
+    local options = args[2 + offset]
+    effect = options.effect
+    time = tonumber(options.time)
+    params = options.params
+  elseif args[2 + offset] then
+    effect = args[2 + offset]
+    time = tonumber(args[3 + offset])
+  end
+  if not effect then
+    effect = "crossFade"
+    time = 0
+  end
+
+  if not currentSceneName then
+    currentSceneName = sceneName
+  elseif currentSceneName == sceneName then
+    storyboard.reloadScene()
+    return
+  else
+    previousSceneName = currentSceneName
+  end
+
+  local fx = effectList[effect] or {}
+  local outgoing = exitCurrentScene(currentView, sceneName, not effect)
+
+  if not touchBlocker then
+    touchBlocker = newTouchBlocker()
+  else
+    touchBlocker.isHitTestable = true
+  end
+
+  local scene = storyboard.scenes[sceneName]
+  if scene then
+    if not scene.view then
+      scene.view = display.newGroup()
+      scene:dispatchEvent({ name = "createScene", params = params })
+    end
+  else
+    local ok, err = pcall(function()
+      storyboard.scenes[sceneName] = require(sceneName)
+    end)
+    if not ok and err then
+      error(err)
+    end
+    scene = storyboard.scenes[sceneName]
+    if type(scene) == "boolean" then
+      error("Attempting to load scene from invalid scene module (" .. sceneName ..
+        ".lua). Did you forget to return the scene object at the end of the scene module? (e.g. 'return scene')")
+    end
+    scene.view = scene.view or display.newGroup()
+    scene:dispatchEvent({ name = "createScene", params = params })
+  end
+  currentView = scene.view
+
+  if fx.sceneAbove then
+    stage:insert(currentView)
+  else
+    stage:insert(1, currentView)
+  end
+  touchBlocker:toFront()
+  currentView.isVisible = false
+  if fx.to then
+    applyStart(currentView, fx.to)
+  end
+
+  local function startIn()
+    transitionIn(currentView, fx, time, touchBlocker, outgoing, params)
+  end
+
+  local fromParams = {
+    x = fx.from.xEnd, y = fx.from.yEnd, alpha = fx.from.alphaEnd,
+    xScale = fx.from.xScaleEnd, yScale = fx.from.yScaleEnd, rotation = fx.from.rotationEnd,
+    time = time or 500,
+    transition = fx.from.transition,
+    onComplete = startIn,
+    delay = 1,
+  }
+  if fx.concurrent then
+    fromParams.onComplete = nil
+  end
+  if outgoing then
+    if fx.concurrent then
+      transition.to(outgoing, fromParams)
+      startIn()
+    elseif fromParams.onComplete then
+      transition.to(outgoing, fromParams)
+    end
+  else
+    startIn()
+  end
+end
 
 Runtime:addEventListener("memoryWarning", function()
-    if not storyboard.disableAutoPurge then
-        if #storyboard.loadedSceneMods >= 3 then
-            local oldest = storyboard.loadedSceneMods[1]
-            if oldest and oldest ~= currentSceneName then
-                storyboard.purgeScene(oldest)
-                debugPrint("Auto-purged oldest scene: " .. oldest)
-            end
-        end
-    else
-        debugPrint("Memory warning received but auto-purge is disabled")
+  if not storyboard.disableAutoPurge then
+    local oldest = storyboard.loadedSceneMods[1]
+    if oldest and oldest ~= currentSceneName and #storyboard.loadedSceneMods > 2 then
+      storyboard.purgeScene(oldest)
     end
+  end
 end)
 
 return storyboard

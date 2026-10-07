@@ -1,206 +1,197 @@
----------------------------------------------------------------------------------
--- accountSettings.lua — Account settings overlay
----------------------------------------------------------------------------------
+-- change username overlay.
+
 local storyboard = require("modules.storyboard")
+local gui = require("modules.gui")
+local population = require("modules.offline.population")
+local serverData = require("modules.offline.serverData")
+
 local scene = storyboard.newScene()
 
--- Module-level variables
-local backButton
-local keyListener
-local background
-local usernameText
-local emailText
-local changePasswordButton
-local syncButton
-local enterFrameListener
+local MAX_USERNAME = 15
+local panel, closeButton, saveButton
+local removeListeners, onFrame, onKey
 
----------------------------------------------------------------------------------
--- CREATE SCENE
----------------------------------------------------------------------------------
-function scene:createScene(event)
-    local view = self.view
-    local gui = require("modules.gui")
-    local font = storyboard.gameDataTable.font
-    local fontSize = storyboard.localized.getFontSize()
-    local textColor = {1, 1, 1, 1}
+function scene:createScene()
+  local view = self.view
+  local font = storyboard.gameDataTable.font
+  local keyboardShown = false
+  panel = display.newGroup()
 
-    ---------------------------------------------------------------------------
-    -- Background
-    ---------------------------------------------------------------------------
-    background = display.newImageRect("images/gui/background/login.png",
-        display.contentWidth, display.contentHeight)
-    background.x = display.contentCenterX
-    background.y = display.contentCenterY
-    view:insert(background)
+  local dim = display.newRect(0, 0, display.actualContentWidth, display.actualContentHeight)
+  dim:setFillColor(0, 0, 0, 0.5882352941176471)
+  dim.x = display.contentWidth * 0.5
+  dim.y = display.contentHeight * 0.5
+  view:insert(dim)
+  local wall = display.newImageRect("images/gui/background/settingsWall1.png", 310, 220)
+  wall.y = -10
 
-    ---------------------------------------------------------------------------
-    -- Settings tab bar
-    ---------------------------------------------------------------------------
-    local settingsModule = require("modules.settingsModule")
-    local settingsBar = settingsModule.create()
-    if settingsBar and settingsBar.displayGroup then
-        view:insert(settingsBar.displayGroup)
+  local title = display.newText(storyboard.localized.get("ChangeUsername"), 0, -80, font, 22)
+  local currentLabel = display.newText("", 0, -45, font, 14)
+  local usernameField = native.newTextField(0, 1000, 180, 26)
+  usernameField.y = -10
+  usernameField.isVisible = false
+  usernameField.hasPlaceholder = false
+  local messageText = display.newText("", 0, 25, font, 14)
+  panel:insert(wall)
+  for _, object in ipairs({ title, currentLabel, usernameField, messageText }) do
+    panel:insert(object)
+  end
+
+  local function showCurrentName()
+    local info = storyboard.database.getPlayerInformation()
+    currentLabel.text = storyboard.localized.get("Username") .. ": " .. (info and info.username or "")
+  end
+
+  local function moveForKeyboard(y)
+    if not isAndroid then
+      panel.y = y
     end
+  end
 
-    ---------------------------------------------------------------------------
-    -- Title
-    ---------------------------------------------------------------------------
-    local titleText = display.newText({
-        text = storyboard.localized.get("Account") or "Account",
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.12,
-        font = font,
-        fontSize = fontSize * 2,
-    })
-    titleText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(titleText)
-
-    ---------------------------------------------------------------------------
-    -- Username display
-    ---------------------------------------------------------------------------
-    local username = ""
-    if storyboard.playerInfo then
-        username = storyboard.playerInfo.username or ""
+  local function onUserInput(event)
+    if event.phase == "began" then
+      keyboardShown = true
+      moveForKeyboard(display.contentHeight * 0.5 - 30)
+    elseif event.phase == "ended" or event.phase == "submitted" then
+      keyboardShown = false
+      moveForKeyboard(display.contentHeight * 0.5)
+      native.setKeyboardFocus(nil)
+    elseif event.phase == "editing" then
+      if string.len(usernameField.text) > MAX_USERNAME then
+        usernameField.text = usernameField.text:sub(1, MAX_USERNAME)
+      end
     end
+  end
 
-    local usernameLabel = display.newText({
-        text = (storyboard.localized.get("Username") or "Username") .. ":",
-        x = display.contentWidth * 0.25,
-        y = display.contentHeight * 0.28,
-        font = font,
-        fontSize = fontSize,
-    })
-    usernameLabel:setFillColor(textColor[1], textColor[2], textColor[3], 0.7)
-    view:insert(usernameLabel)
-
-    usernameText = display.newText({
-        text = username,
-        x = display.contentWidth * 0.65,
-        y = display.contentHeight * 0.28,
-        font = font,
-        fontSize = fontSize,
-    })
-    usernameText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(usernameText)
-
-    ---------------------------------------------------------------------------
-    -- Email display
-    ---------------------------------------------------------------------------
-    local email = ""
-    if storyboard.playerInfo then
-        email = storyboard.playerInfo.email or ""
+  local function save()
+    native.setKeyboardFocus(nil)
+    local name = string.gsub(usernameField.text or "", "%s", "")
+    local info = storyboard.database.getPlayerInformation()
+    local problem
+    if string.len(name) < 1 then
+      problem = storyboard.localized.get("EnterUsername")
+    elseif string.len(name) < 3 then
+      problem = storyboard.localized.get("UsernameTooShort")
+    elseif string.gsub(name, "[^%a%d]", "") ~= name then
+      problem = storyboard.localized.get("ValidCharacterMessage")
+    elseif population.getByName(name) then
+      problem = storyboard.localized.get("This username is already taken.")
     end
-
-    local emailLabel = display.newText({
-        text = (storyboard.localized.get("Email") or "Email") .. ":",
-        x = display.contentWidth * 0.25,
-        y = display.contentHeight * 0.38,
-        font = font,
-        fontSize = fontSize,
-    })
-    emailLabel:setFillColor(textColor[1], textColor[2], textColor[3], 0.7)
-    view:insert(emailLabel)
-
-    emailText = display.newText({
-        text = email,
-        x = display.contentWidth * 0.65,
-        y = display.contentHeight * 0.38,
-        font = font,
-        fontSize = fontSize,
-    })
-    emailText:setFillColor(textColor[1], textColor[2], textColor[3], textColor[4])
-    view:insert(emailText)
-
-    ---------------------------------------------------------------------------
-    -- Change Password button
-    ---------------------------------------------------------------------------
-    local function onChangePasswordTap(event)
-        storyboard.gotoScene("scenes.forgotPasswordScene")
-        return true
+    if not problem and name ~= info.username then
+      local refused = serverData.renameAccount(name)
+      if refused then
+        problem = storyboard.localized.get(refused)
+      else
+        storyboard.database.setPlayerInformation(name, info.playerId, info.token)
+        storyboard.playerInfo = storyboard.database.getPlayerInformation()
+      end
     end
-
-    changePasswordButton = gui.newButton({
-        image = "images/gui/button/blank.png",
-        text = storyboard.localized.get("ChangePassword") or "Change Password",
-        width = 150, height = 40,
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.55,
-        onRelease = onChangePasswordTap,
-    })
-    view:insert(changePasswordButton.displayGroup or changePasswordButton)
-
-    ---------------------------------------------------------------------------
-    -- Sync Devices button
-    ---------------------------------------------------------------------------
-    local function onSyncTap(event)
-        storyboard.gotoScene("scenes.syncDevicesScene")
-        return true
+    if problem then
+      messageText:setFillColor(1, 0.45, 0.45)
+      messageText.text = problem
+    else
+      messageText:setFillColor(0.6, 1, 0.6)
+      messageText.text = storyboard.localized.get("UsernameChanged")
+      usernameField.text = ""
+      showCurrentName()
     end
+  end
 
-    syncButton = gui.newButton({
-        image = "images/gui/button/blank.png",
-        text = storyboard.localized.get("SyncDevices") or "Sync Devices",
-        width = 150, height = 40,
-        x = display.contentCenterX,
-        y = display.contentHeight * 0.68,
-        onRelease = onSyncTap,
-    })
-    view:insert(syncButton.displayGroup or syncButton)
+  saveButton = gui.newButton({
+    image = "images/gui/button/blank.png",
+    text = { string = storyboard.localized.get("Save"), size = 25 },
+    width = 80, height = 50, onRelease = save, x = 0, y = 70, displayGroup = panel,
+  })
+  closeButton = gui.newButton({
+    image = "images/gui/button/exit.png", width = 20, height = 19,
+    onRelease = function() storyboard.hideOverlay() end,
+    x = 135, y = -100, displayGroup = panel,
+  })
 
-    ---------------------------------------------------------------------------
-    -- Back button
-    ---------------------------------------------------------------------------
-    local function onBackTap(event)
-        storyboard.gotoScene("scenes.settings")
-        storyboard.purgeScene("scenes.accountSettings")
-        return true
+  function panel.addButtonListeners()
+    saveButton.addListener()
+    usernameField:addEventListener("userInput", onUserInput)
+  end
+  function panel.removeButtonListeners()
+    saveButton.removeListener()
+    usernameField:removeEventListener("userInput", onUserInput)
+  end
+
+  local function onPanelTouch(event)
+    if event.phase == "ended" then
+      native.setKeyboardFocus(nil)
     end
-
-    backButton = gui.newButton({
-        image = "images/gui/button/smallHome.png",
-        width = 35, height = 35,
-        x = 26, y = 26,
-        onRelease = onBackTap,
-    })
-    view:insert(backButton.displayGroup or backButton)
-
-    ---------------------------------------------------------------------------
-    -- Key listener (Android back)
-    ---------------------------------------------------------------------------
-    keyListener = function(event)
-        if event.keyName == "back" and event.phase == "up" then
-            onBackTap(event)
-            return true
-        end
+    return true
+  end
+  local function onDimTouch(event)
+    if event.phase == "ended" then
+      if keyboardShown then
+        native.setKeyboardFocus(nil)
+      else
+        storyboard.hideOverlay()
+      end
     end
-    Runtime:addEventListener("key", keyListener)
+    return true
+  end
+
+  function removeListeners()
+    native.setKeyboardFocus(nil)
+    usernameField.isVisible = false
+    panel.removeButtonListeners()
+    dim:removeEventListener("touch", onDimTouch)
+    wall:removeEventListener("touch", onPanelTouch)
+  end
+
+  dim:addEventListener("touch", onDimTouch)
+  wall:addEventListener("touch", onPanelTouch)
+  view:insert(panel)
+  panel.x = display.contentWidth * 0.5
+  panel.y = display.contentHeight * 0.5
+  showCurrentName()
+  usernameField.isVisible = true
 end
 
----------------------------------------------------------------------------------
--- ENTER SCENE
----------------------------------------------------------------------------------
-function scene:enterScene(event)
+function scene:enterScene()
+  local backKeyEnabled, backPressed = false, false
+
+  function onFrame()
+    if backPressed then
+      backPressed = false
+      backKeyEnabled = false
+      storyboard.hideOverlay()
+    end
+  end
+
+  function onKey(event)
+    if event.phase == "up" and event.keyName == "back" then
+      if backKeyEnabled then
+        backPressed = true
+      end
+      return true
+    end
+    return false
+  end
+
+  timer.performWithDelay(200, function()
+    if saveButton then
+      backKeyEnabled = true
+      closeButton.addListener()
+      panel.addButtonListeners()
+    end
+  end, 1)
+  Runtime:addEventListener("key", onKey)
+  Runtime:addEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- EXIT SCENE
----------------------------------------------------------------------------------
-function scene:exitScene(event)
-    Runtime:removeEventListener("key", keyListener)
+function scene:exitScene()
+  Runtime:removeEventListener("key", onKey)
+  Runtime:removeEventListener("enterFrame", onFrame)
 end
 
----------------------------------------------------------------------------------
--- DESTROY SCENE
----------------------------------------------------------------------------------
-function scene:destroyScene(event)
-    background = nil
-    backButton = nil
-    usernameText = nil
-    emailText = nil
-    changePasswordButton = nil
-    syncButton = nil
-    enterFrameListener = nil
-    keyListener = nil
+function scene:destroyScene()
+  removeListeners()
+  closeButton.removeListener()
+  closeButton, panel, saveButton = nil, nil, nil
 end
 
 scene:addEventListener("createScene", scene)

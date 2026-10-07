@@ -1,176 +1,273 @@
--- communicationModule.lua — Network coordination module (offline stub)
--- Wraps httpClient + tcpSocial. Original servers offline.
--- Provides expected API surface with offline-compatible behavior.
+-- client side of the social protocol.
 
 local storyboard = require("modules.storyboard")
+local accessories = require("modules.accessories")
+local createSprite = require("modules.createSprite")
 
 local comm = {}
 
-local callback = nil
+local BROWN = { 0.24313725490196078, 0.14901960784313725, 0.11764705882352941 }
+
+local pendingAccount
+local pendingPurchase
+
+function comm.callback() end
+
+local function toIndexes(itemIds)
+  local indexes = {}
+  for i = 1, #itemIds do
+    indexes[i] = accessories.getItem(itemIds[i]).item
+  end
+  return indexes
+end
+
+local function showChallengeCompleted(packet)
+  local group = display.newGroup()
+  local removed = false
+  storyboard.showingDailyChallange = true
+  local background = display.newImageRect("images/gui/button/dropDownDC.png", 240, 40)
+  background.anchorX, background.anchorY = 0.5, 1
+  background.x, background.y = 0, 0
+  group:insert(background)
+
+  local content = display.newGroup()
+  local coin = display.newImageRect("images/gui/extra/coin.png", 15, 15)
+  coin.anchorX, coin.anchorY = 0, 0.5
+  coin.x, coin.y = 0, 0
+  content:insert(coin)
+  local title = packet.h and storyboard.localized.get(packet.h) or ""
+  local text = display.newText(packet.c .. " " .. title, 0, 0, storyboard.gameDataTable.font,
+    storyboard.localized.getFontSize() * 2.5)
+  text.anchorX, text.anchorY = 0, 0.5
+  text:setFillColor(BROWN[1], BROWN[2], BROWN[3])
+  text.xScale, text.yScale = 0.5, 0.5
+  text.x, text.y = 20, 0
+  content:insert(text)
+  content.anchorX, content.anchorY = 0.5, 1
+  content.anchorChildren = true
+  content.x, content.y = 0, -4
+  group:insert(content)
+
+  local function remove(g)
+    if not removed then
+      removed = true
+      display.remove(g)
+      storyboard.showingDailyChallange = false
+    end
+  end
+
+  group.x = display.contentWidth * 0.5
+  group.y = background.height + 5
+  group.alpha = 0
+  if storyboard.database.getSound() == 1 then
+    audio.play(storyboard.gameDataTable.sounds.challangeCompleted)
+  end
+  transition.to(group, { time = 100, alpha = 1 })
+  transition.to(group, { time = 150, delay = 3000, alpha = 0, onComplete = remove })
+end
+
+local function logOut()
+  if storyboard.playerInfo then
+    comm.stopTCPSocial()
+    storyboard.tcpClient.stopTCPClient()
+  end
+  local current = storyboard.getCurrentSceneName()
+  if current ~= "scenes.mainMenu" then
+    storyboard.purgeScene("scenes.mainMenu")
+  end
+  storyboard.gotoScene("scenes.registerScene")
+  storyboard.purgeScene(current)
+end
+
+local function onSocialPacket(packet)
+  local m = packet.m
+  if m == "l" then
+    if packet.a == 1 then
+      if packet.t then
+        storyboard.gameDataTable.messageOfTheDay = packet.t
+      end
+      if packet.b then
+        storyboard.gameDataTable.serverVersion = packet.b
+      end
+      storyboard.database.setAvatarData(toIndexes(packet.d))
+      if storyboard.getCurrentSceneName() ~= "scenes.marketplace" then
+        createSprite.updateAvatar(storyboard.database.getAvatarData())
+      end
+      if packet.e then
+        storyboard.database.setNumberOfGamesPlayed(packet.e)
+      end
+      if packet.i then
+        storyboard.database.setMoney(packet.i)
+      end
+      comm.callback({ a = packet.a, m = "l" })
+    elseif packet.a == 2 then
+      comm.callback({ a = packet.a, m = "l" })
+      native.showAlert(storyboard.localized.get("LoggingOut"), storyboard.localized.get("AccountDevice"),
+        { storyboard.localized.get("Ok") }, logOut)
+    elseif packet.a == 4 then
+      if storyboard.gameDataTable.tryIt == 0 then
+        native.showAlert(storyboard.localized.get("Error"),
+          storyboard.localized.get("This user doesn't exist. Please contact us"),
+          { storyboard.localized.get("Ok") }, logOut)
+      end
+    end
+
+  elseif m == "a" then
+    if packet.a then
+      comm.callback({ a = packet.a, m = "a" })
+    else
+      comm.callback({ e = 0, m = "a" })
+    end
+
+  elseif m == "h" or m == "u" then
+    if packet.l then
+      packet.s.a = toIndexes(packet.s.a)
+      for _, entry in ipairs(packet.l) do
+        entry.a = toIndexes(entry.a)
+      end
+      comm.callback({ l = packet.l, s = packet.s, m = m, t = packet.t, a = packet.a })
+    else
+      comm.callback({ e = 0, m = m })
+    end
+
+  elseif m == "n" then
+    if packet.p then
+      table.insert(packet.p[1], 100)
+      table.insert(packet.p[2], 200)
+      table.insert(packet.p[3], 300)
+      table.insert(packet.p[4], 400)
+      storyboard.database.setItems(packet.p)
+      storyboard.database.setMoney(packet.c)
+      comm.callback({ p = packet.p, m = "n" })
+    else
+      comm.callback({ e = 0, m = "n" })
+    end
+
+  elseif m == "o" then
+    if packet.a == 1 then
+      local item = accessories.getItem(packet.i)
+      storyboard.database.addItem(item.category, packet.i)
+      storyboard.database.decreaseMoney(item.price)
+      if packet.c then
+        storyboard.database.setMoney(packet.c)
+      end
+      comm.callback({ m = "o", a = 1, price = item.price, category = item.category, itemId = packet.i })
+    elseif packet.a then
+      comm.callback(packet)
+    end
+
+  elseif m == "p" then
+    if packet.a == 1 then
+      storyboard.database.setAvatarData(toIndexes(packet.d))
+    end
+
+  elseif m == "y" then
+    comm.callback(packet)
+
+  elseif m == "r" then
+    if packet.c then
+      storyboard.database.setMoney(packet.c)
+    end
+    comm.callback(packet)
+
+  elseif m == "s" then
+    if storyboard.showingDailyChallange == false then
+      showChallengeCompleted(packet)
+    else
+      timer.performWithDelay(4000, function() return onSocialPacket(packet) end, 1)
+    end
+
+  elseif m == "z" then
+    if packet.a then
+      storyboard.database.setEarnCoins(packet.a)
+    end
+    comm.callback(packet)
+
+  elseif m == "A" then
+    if not packet.a then
+      storyboard.database.increaseMoney(packet.d or 0)
+      storyboard.database.setEarnCoins(packet.c)
+    elseif packet.a == 2 then
+    end
+    comm.callback(packet)
+
+  elseif m == "coins" then
+    if pendingPurchase then
+      local callback = pendingPurchase
+      pendingPurchase = nil
+      if packet.a == 1 then
+        storyboard.database.setMoney(packet.c)
+        callback({ message = "+" .. packet.d, value = packet.c })
+      else
+        callback({ message = storyboard.localized.get("PurchaseFailed"), value = -1 })
+      end
+    end
+  end
+end
+
+local function onAccountPacket(packet)
+  if packet.a == 1 and pendingAccount then
+    storyboard.database.setPlayerInformation(pendingAccount.username, packet.playerId, packet.token)
+    storyboard.playerInfo = storyboard.database.getPlayerInformation()
+  end
+  comm.callback(packet)
+  pendingAccount = nil
+end
 
 function comm.setCallback(fn)
-    callback = fn
+  comm.callback = fn
 end
 
--- Account functions (delegate to httpClient stubs)
-function comm.createUser(email, username, password)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.createUser(email, username, password) end
+function comm.createUser(username)
+  pendingAccount = { username = username }
+  storyboard.httpClient.initWithReceiveFunction(onAccountPacket)
+  storyboard.httpClient.createUser(username)
 end
 
-function comm.createFacebookUser(username, facebookId, ...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.createFacebookUser(username, facebookId, ...) end
-end
-
-function comm.addUserInformation(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.addUserInformation(...) end
-end
-
-function comm.changePassword(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.changePassword(...) end
-end
-
-function comm.changeEmail(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.changeEmail(...) end
-end
-
-function comm.loginUser(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.loginUser(...) end
-end
-
-function comm.addFacebookInformation(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.addFacebookInformation(...) end
-end
-
-function comm.loginFacebookUser(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.loginFacebookUser(...) end
-end
-
-function comm.forgotPassword(...)
-    local httpClient = storyboard.httpClient
-    if httpClient then httpClient.forgotPassword(...) end
-end
-
--- Social TCP functions (stubs — servers offline)
 function comm.startSocialTCP(callback)
-    print("[comm] startSocialTCP (offline stub)")
-    if callback then callback({ m = "l", a = 1 }) end
+  if storyboard.playerInfo then
+    comm.callback = callback
+    storyboard.tcpSocial.startTCP(onSocialPacket)
+    return true
+  end
+  return false
 end
 
 function comm.stopTCPSocial()
-    local tcpSocial = storyboard.tcpSocial
-    if tcpSocial then tcpSocial.closeTCP() end
+  comm.callback = function() end
+  storyboard.tcpSocial.closeTCP()
 end
 
-function comm.getGameServerAddress(...)
-    print("[comm] getGameServerAddress (offline stub)")
+local function send(packet)
+  storyboard.tcpSocial.sendPacket(packet)
 end
 
-function comm.sendFriendRequest(...)
-    print("[comm] sendFriendRequest (offline stub)")
+function comm.getGameServerAddress() send({ m = "a" }) end
+function comm.repportPlayer(username, reason) send({ m = "w", a = username, b = reason }) end
+function comm.getRepports() send({ m = "y" }) end
+function comm.getTopList() send({ m = "h" }) end
+function comm.getWeeklyList() send({ m = "u" }) end
+function comm.getDaliyChallanges() send({ m = "r" }) end
+function comm.getMyItems() send({ m = "n" }) end
+function comm.buyItem(itemId) send({ m = "o", i = itemId }) end
+function comm.getEarnCoins() send({ m = "z" }) end
+function comm.claimEarnCoins(offerId) send({ m = "A", b = offerId }) end
+
+function comm.addMoney(pack, callback)
+  pendingPurchase = callback
+  send({ m = "coins", v = pack })
 end
 
-function comm.deleteFriendRequest(...)
-    print("[comm] deleteFriendRequest (offline stub)")
-end
-
-function comm.acceptFriendRequest(...)
-    print("[comm] acceptFriendRequest (offline stub)")
-end
-
-function comm.getFriends()
-    print("[comm] getFriends (offline stub)")
-end
-
-function comm.getOnlineFriends()
-    print("[comm] getOnlineFriends (offline stub)")
-end
-
-function comm.repportPlayer(...)
-    print("[comm] repportPlayer (offline stub)")
-end
-
-function comm.getRepports(...)
-    print("[comm] getRepports (offline stub)")
-end
-
-function comm.rewardedVideo(...)
-    print("[comm] rewardedVideo (offline stub)")
-end
-
-function comm.deleteFriend(...)
-    print("[comm] deleteFriend (offline stub)")
-end
-
-function comm.sendGameInvite(...)
-    print("[comm] sendGameInvite (offline stub)")
-end
-
-function comm.deleteGameInvite(...)
-    print("[comm] deleteGameInvite (offline stub)")
-end
-
-function comm.acceptGameInvite(...)
-    print("[comm] acceptGameInvite (offline stub)")
-end
-
-function comm.getTopList()
-    print("[comm] getTopList (offline stub)")
-end
-
-function comm.getFriendList()
-    print("[comm] getFriendList (offline stub)")
-end
-
-function comm.getWeeklyList()
-    print("[comm] getWeeklyList (offline stub)")
-end
-
-function comm.getDaliyChallanges()
-    print("[comm] getDaliyChallanges (offline stub)")
-end
-
-function comm.viewedWholeVideo(...)
-    print("[comm] viewedWholeVideo (offline stub)")
-end
-
-function comm.getNumberOfNotifications()
-    return 0
-end
-
-function comm.getMyItems()
-    print("[comm] getMyItems (offline stub)")
-end
-
-function comm.buyItem(...)
-    print("[comm] buyItem (offline stub)")
-end
-
-function comm.setAvatarData(...)
-    print("[comm] setAvatarData (offline stub)")
-end
-
-function comm.addMoney(...)
-    print("[comm] addMoney (offline stub)")
-end
-
-function comm.sendUnvalidatedReceipts()
-    print("[comm] sendUnvalidatedReceipts (offline stub)")
-end
-
-function comm.getEarnCoins()
-    print("[comm] getEarnCoins (offline stub)")
-end
-
-function comm.claimEarnCoins(data)
-    print("[comm] claimEarnCoins (offline stub)")
+function comm.setAvatarData(avatar)
+  send({
+    m = "p",
+    d = {
+      accessories.getItemId(1, avatar[1]),
+      accessories.getItemId(2, avatar[2]),
+      accessories.getItemId(3, avatar[3]),
+      accessories.getItemId(4, avatar[4]),
+    },
+  })
 end
 
 return comm

@@ -1,96 +1,50 @@
----------------------------------------------------------------------------------
--- settingsModule.lua — Creates the settings tab bar (General, Account, Help)
----------------------------------------------------------------------------------
-local settingsModule = {}
+-- settings buttons.
 
 local storyboard = require("modules.storyboard")
 local gui = require("modules.gui")
 
-function settingsModule.create()
-    local group = display.newGroup()
+local M = {}
 
-    local buttonWidth = 112
-    local buttonHeight = 50
-    local baseX = 160
-    local y = 290
-    local spacing = 120
+function M.create()
+  local group = display.newGroup()
+  local WIDTH, HEIGHT = 112, 50
+  local scale = display.contentWidth / 480
+  local LEFT, Y, SPACING = 160 * scale, 290, 120 * scale
 
-    local generalButton
-    local accountButton
-    local helpButton
+  local general = gui.newButton({
+    image = "images/gui/button/general.png", width = WIDTH, height = HEIGHT,
+    onRelease = function() storyboard.showOverlay("scenes.generalSettings", { isModal = true }) end,
+    x = LEFT + SPACING, y = Y, displayGroup = group,
+  })
+  local account = gui.newButton({
+    image = "images/gui/button/account.png", width = WIDTH, height = HEIGHT,
+    onRelease = function() storyboard.showOverlay("scenes.accountSettings", { isModal = true }) end,
+    x = LEFT, y = Y, displayGroup = group,
+  })
+  local help = gui.newButton({
+    image = "images/gui/button/help.png", width = WIDTH, height = HEIGHT,
+    onRelease = function() storyboard.showOverlay("scenes.helpSettings", { isModal = true }) end,
+    x = LEFT + 2 * SPACING, y = Y, displayGroup = group,
+  })
 
-    ---------------------------------------------------------------------------
-    -- Button handlers: open overlay scenes
-    ---------------------------------------------------------------------------
-    local function onGeneralTap()
-        storyboard.showOverlay("scenes.generalSettings", {isModal = true})
-    end
+  function group.addButtonListeners()
+    account.addListener()
+    general.addListener()
+    help.addListener()
+  end
 
-    local function onAccountTap()
-        storyboard.showOverlay("scenes.accountSettings", {isModal = true})
-    end
+  function group.removeButtonListeners()
+    account.removeListener()
+    general.removeListener()
+    help.removeListener()
+  end
 
-    local function onHelpTap()
-        storyboard.showOverlay("scenes.helpSettings", {isModal = true})
-    end
+  function group.clean()
+    group.removeButtonListeners()
+    display.remove(group)
+  end
 
-    ---------------------------------------------------------------------------
-    -- Create buttons
-    ---------------------------------------------------------------------------
-    generalButton = gui.newButton({
-        image = "images/gui/button/general.png",
-        width = buttonWidth,
-        height = buttonHeight,
-        onRelease = onGeneralTap,
-        x = baseX + spacing,
-        y = y,
-        displayGroup = group
-    })
-
-    accountButton = gui.newButton({
-        image = "images/gui/button/account.png",
-        width = buttonWidth,
-        height = buttonHeight,
-        onRelease = onAccountTap,
-        x = baseX,
-        y = y,
-        displayGroup = group
-    })
-
-    helpButton = gui.newButton({
-        image = "images/gui/button/help.png",
-        width = buttonWidth,
-        height = buttonHeight,
-        onRelease = onHelpTap,
-        x = baseX + 2 * spacing,
-        y = y,
-        displayGroup = group
-    })
-
-    ---------------------------------------------------------------------------
-    -- Add/remove all button listeners
-    ---------------------------------------------------------------------------
-    function group.addButtonListeners()
-        accountButton.addListener()
-        generalButton.addListener()
-        helpButton.addListener()
-    end
-
-    function group.removeButtonListeners()
-        accountButton.removeListener()
-        generalButton.removeListener()
-        helpButton.removeListener()
-    end
-
-    ---------------------------------------------------------------------------
-    -- Clean up (remove listeners and display group)
-    ---------------------------------------------------------------------------
-    function group.clean()
-        group.removeButtonListeners()
-        group:removeSelf()
-    end
-
-    return group
+  return group
 end
 
-return settingsModule
+return M

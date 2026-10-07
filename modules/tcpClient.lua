@@ -1,64 +1,63 @@
--- tcpClient.lua — Game TCP client stub (offline)
--- Original game servers are offline. Provides expected API surface.
+-- game server connection.
 
-local json = require("json")
 local storyboard = require("modules.storyboard")
+local gameServer = require("modules.offline.gameServer")
 
 local tcpClient = {}
 
-local gameServerAddress = nil
+local RECEIVE_INTERVAL = 50
+local receive
 local connected = false
 
-function tcpClient.setGameServerAddress(addr)
-    gameServerAddress = addr
-    print("[tcpClient] setGameServerAddress: " .. tostring(addr))
+local function deliver(packet)
+  timer.performWithDelay(RECEIVE_INTERVAL, function()
+    if connected and receive then
+      receive(packet)
+    end
+  end, 1)
+end
+
+function tcpClient.setGameServerAddress() end
+
+function tcpClient.startTCPClient(info, receiveFunction)
+  tcpClient.stopTCPClient()
+  connected = true
+  receive = receiveFunction
+  gameServer.connect(info, deliver)
 end
 
 function tcpClient.stopTCPClient()
-    connected = false
-    print("[tcpClient] stopTCPClient (offline stub)")
+  if connected then
+    gameServer.disconnect()
+  end
+  connected = false
 end
 
-function tcpClient.startTCPClient(params)
-    print("[tcpClient] startTCPClient (offline stub)")
-    connected = true
-    -- In offline mode, we don't actually connect
+function tcpClient.changeReceiveInfo(fn)
+  if connected then
+    receive = fn
+  end
 end
 
-function tcpClient.changeReceiveInfo(...)
-    -- No-op in offline mode
+function tcpClient.sendPacketLobby(packet)
+  if connected then
+    gameServer.receive({ m = packet.m, v = packet.v })
+  end
 end
 
-function tcpClient.sendPacket(data)
-    print("[tcpClient] sendPacket (offline stub)")
+function tcpClient.reportRaceResult(result)
+  return gameServer.finishRace(result)
 end
 
-function tcpClient.sendPacketHit(data)
-    print("[tcpClient] sendPacketHit (offline stub)")
+function tcpClient.getRacers()
+  return gameServer.getRacers()
 end
 
-function tcpClient.sendPacketFinish(data)
-    print("[tcpClient] sendPacketFinish (offline stub)")
-end
-
-function tcpClient.sendPacketGotPU(data)
-    print("[tcpClient] sendPacketGotPU (offline stub)")
-end
-
-function tcpClient.sendPacketReportPlayer(data)
-    print("[tcpClient] sendPacketReportPlayer (offline stub)")
-end
-
-function tcpClient.sendPacketLobby(data)
-    print("[tcpClient] sendPacketLobby (offline stub)")
-end
-
-function tcpClient.sendPacketChat(data)
-    print("[tcpClient] sendPacketChat (offline stub)")
-end
-
-function tcpClient.sendPacketUDPConfirm(data)
-    print("[tcpClient] sendPacketUDPConfirm (offline stub)")
-end
+function tcpClient.sendPacket() end
+function tcpClient.sendPacketHit() end
+function tcpClient.sendPacketFinish() end
+function tcpClient.sendPacketGotPU() end
+function tcpClient.sendPacketReportPlayer() end
+function tcpClient.sendPacketUDPConfirm() end
 
 return tcpClient

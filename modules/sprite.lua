@@ -1,107 +1,101 @@
--- sprite.lua — Compatibility shim for old Corona SDK sprite library
--- Modern Solar2D uses graphics.newImageSheet + display.newSprite directly.
--- This module wraps those APIs to support legacy code.
+-- sprite helper.
 
-local M = {}
+local sprite = {}
 
---- Create a sprite sheet from an image file
--- @param imagePath string - path to the sprite sheet image
--- @param frameWidth number - width of each frame
--- @param frameHeight number - height of each frame
--- @return table - sheet data object
-function M.newSpriteSheet(imagePath, frameWidth, frameHeight)
-    local sheet = {
-        imagePath = imagePath,
-        frameWidth = frameWidth,
-        frameHeight = frameHeight,
-    }
-    return sheet
-end
-
---- Create a sprite set (frame configuration) from a sheet
--- @param sheet table - the sprite sheet from newSpriteSheet
--- @param startFrame number - first frame index
--- @param numFrames number - total number of frames
--- @return table - sprite set object
-function M.newSpriteSet(sheet, startFrame, numFrames)
-    local set = {
-        sheet = sheet,
-        startFrame = startFrame,
-        numFrames = numFrames,
-        sequences = {},
-    }
-    -- Default sequence
-    set.sequences["default"] = {
-        name = "default",
-        start = startFrame,
-        count = numFrames,
-        time = 1000,
-        loopCount = 0,
-    }
-    return set
-end
-
---- Add a named animation sequence to a sprite set
--- @param set table - the sprite set
--- @param name string - sequence name
--- @param startFrame number - first frame of the sequence
--- @param numFrames number - number of frames
--- @param time number - total animation time in ms
--- @param loopCount number - number of loops (0 = infinite)
-function M.add(set, name, startFrame, numFrames, time, loopCount)
-    set.sequences[name] = {
-        name = name,
-        start = startFrame,
-        count = numFrames,
-        time = time or 1000,
-        loopCount = loopCount or 0,
-    }
-end
-
---- Create a sprite factory (multi-sprite) from a sprite set
--- This creates the Solar2D image sheet and returns a factory
--- that can produce sprite instances.
--- @param set table - the sprite set
--- @return table - factory with newInstance() method
-function M.newSpriteMulti(set)
-    local sheet = set.sheet
-
-    -- Build the options for graphics.newImageSheet
-    local sheetOptions = {
-        width = sheet.frameWidth,
-        height = sheet.frameHeight,
-        numFrames = set.numFrames,
-    }
-
-    -- Create the actual Solar2D image sheet
-    local imageSheet = graphics.newImageSheet(sheet.imagePath, sheetOptions)
-
-    -- Build sequence data array for display.newSprite
-    local sequenceData = {}
-    for name, seq in pairs(set.sequences) do
-        sequenceData[#sequenceData + 1] = {
-            name = seq.name,
-            start = seq.start,
-            count = seq.count,
-            time = seq.time,
-            loopCount = seq.loopCount,
-        }
+local function getImageSheet(sheet)
+  if not sheet.imageSheet then
+    local options
+    if sheet.format == "simple" then
+      options = { width = sheet.width, height = sheet.height, numFrames = sheet.numFrames }
+    else
+      options = { frames = sheet.frames }
     end
-
-    -- Factory object
-    local factory = {
-        imageSheet = imageSheet,
-        sequenceData = sequenceData,
-        set = set,
-    }
-
-    --- Create a new sprite instance from this factory
-    function factory:newInstance()
-        local spriteObj = display.newSprite(self.imageSheet, self.sequenceData)
-        return spriteObj
+    if sheet.baseDir then
+      sheet.imageSheet = graphics.newImageSheet(sheet.filename, sheet.baseDir, options)
+    else
+      sheet.imageSheet = graphics.newImageSheet(sheet.filename, options)
     end
-
-    return factory
+  end
+  return sheet.imageSheet
 end
 
-return M
+local function newSheet(format, filename, baseDir)
+  local sheet = { type = "spriteSheet", format = format, filename = filename, baseDir = baseDir }
+  function sheet:dispose()
+    self.imageSheet = nil
+  end
+  return sheet
+end
+
+function sprite.newSpriteSheet(filename, ...)
+  local args = { ... }
+  local baseDir
+  if type(args[1]) == "userdata" then
+    baseDir = table.remove(args, 1)
+  end
+  local sheet = newSheet("simple", filename, baseDir)
+  sheet.width, sheet.height = args[1], args[2]
+  return sheet
+end
+
+function sprite.newSpriteSheetFromData(filename, ...)
+  local args = { ... }
+  local baseDir
+  if type(args[1]) == "userdata" then
+    baseDir = table.remove(args, 1)
+  end
+  local sheet = newSheet("complex", filename, baseDir)
+  sheet.frames = assert(args[1], "sprite.newSpriteSheetFromData(): frames are missing")
+  return sheet
+end
+
+function sprite.newSpriteSet(sheet, startFrame, numFrames)
+  assert(sheet and sheet.type == "spriteSheet", "sprite.newSpriteSet(): spriteSheet is malformed.")
+  return { type = "spriteSet", spriteSheet = sheet, startFrame = startFrame, numFrames = numFrames, sequences = {} }
+end
+
+function sprite.add(set, name, startFrame, frameCount, time, loopParam)
+  assert(set and set.type == "spriteSet", "sprite.add(): incorrect 'spriteSet.type'.")
+  local loopCount, loopDirection = 0, nil
+  if loopParam and loopParam ~= 0 then
+    loopCount = 1
+    if loopParam == -1 then
+      loopDirection = "bounce"
+    elseif loopParam == -2 then
+      loopCount = 0
+      loopDirection = "bounce"
+    elseif loopParam > 0 then
+      loopCount = loopParam
+    end
+  end
+  table.insert(set.sequences, {
+    name = name,
+    start = startFrame + set.startFrame - 1,
+    count = frameCount,
+    time = time,
+    loopCount = loopCount,
+    loopDirection = loopDirection,
+  })
+end
+
+function sprite.newSprite(set)
+  assert(set and set.type == "spriteSet", "sprite.newSprite(): incorrect 'spriteSet.type'.")
+  local sheet = set.spriteSheet
+  local sequences = {}
+  for i = 1, #set.sequences do
+    sequences[i] = set.sequences[i]
+  end
+  sequences[#sequences + 1] = { name = "default", start = set.startFrame, count = set.numFrames }
+  if sheet.format == "simple" then
+    sheet.numFrames = math.max(sheet.numFrames or 0, set.startFrame + set.numFrames - 1)
+  end
+
+  local instance = display.newSprite(getImageSheet(sheet), sequences)
+  function instance:prepare(sequenceName)
+    self:setSequence(sequenceName)
+  end
+  instance:prepare("default")
+  return instance
+end
+
+return sprite

@@ -1,607 +1,655 @@
----------------------------------------------------------------------------------
--- marketplace.lua — Full item marketplace / shop
--- Reconstructed from decompiled marketplace.lu.lua
--- 4 categories: Avatars, Hats, Items, Boots
--- Fully offline — purchases use local coins
----------------------------------------------------------------------------------
+-- market.
+
 local storyboard = require("modules.storyboard")
+local gui = require("modules.gui")
+local accessories = require("modules.accessories")
+local createSprite = require("modules.createSprite")
+local tableViewHorizontal = require("modules.tableViewHorizontal")
+local loadingAnimation = require("modules.loadingAnimation")
+
 local scene = storyboard.newScene()
 
-local accessories = require("modules.accessories")
+local AVATARS, HATS, ITEMS, BOOTS = 1, 2, 3, 4
+local GOLD_FOX_ID, DIAMOND_DOE_ID = 199, 198
 
--- Module-level variables
-local homeButton
-local keyListener
-local background
-local leftBar
-local categoryTabs = {}       -- 4 tab images
-local selectedCategory = 1    -- 1=Avatar, 2=Hat, 3=Item, 4=Boots
-local moneyText
-local coinIcon
-local itemNameText
-local itemPriceText
-local priceIcon
-local statusText
-local buyButton
-local previewImage            -- currently shown thumbnail
-local scrollGroup             -- horizontal list container
-local scrollContent           -- inner content group
-local selectedIndex = 1       -- selected item in current list
-local avatarData              -- current avatar { avatar, hat, item, boots }
-local ownedItems              -- storyboard.databaseData.items
-local currentList = {}        -- active category item list
-local cellImages = {}         -- cell display objects
+local homeButton, getMoreButton, buyButton
+local categoryTabs = {}
+local packButtons = {}
+local loader
+local avatar
+local savedAvatar
+local onFrame, onKey, addListeners, cleanUp
 
--- Match decompiled coordinates exactly
-local CELL_SIZE = 80
-local CELL_PAD = 4
-local SCROLL_Y = 264          -- bottom-anchored in original
-local SCROLL_X = 145
-local SCROLL_W = 310
-local SCROLL_H = 80
-
-local PREVIEW_X = 290
-local PREVIEW_Y = 120
-local PREVIEW_SIZE = 80
-
-local TAB_NAMES = { "Avatars", "Hats", "Items", "Boots" }
-
----------------------------------------------------------------------------------
--- HELPERS
----------------------------------------------------------------------------------
-local function formatPrice(n)
-    if n >= 1000000000 then return string.format("%.0fB", n / 1000000000)
-    elseif n >= 1000000 then return string.format("%.1fM", n / 1000000)
-    elseif n >= 10000 then return string.format("%.0fK", n / 1000)
-    else return tostring(n) end
+local function isNewItem(itemId)
+  for _, id in ipairs(storyboard.config.newItems.items) do
+    if itemId == id then
+      return true
+    end
+  end
+  return false
 end
 
-local function isOwned(category, itemId)
-    if not ownedItems then return false end
-    local catItems = ownedItems[category]
-    if not catItems then return false end
-    for _, id in ipairs(catItems) do
-        if id == itemId then return true end
+function scene:createScene()
+  local extra = display.contentWidth - 480
+  local view = display.newGroup()
+  self.view:insert(view)
+  view.x = extra
+  local font = storyboard.gameDataTable.font
+  local FONT_SIZE = 22
+  local WHITE = { 1, 1, 1, 1 }
+  local buttonSound = storyboard.gameDataTable.sounds.buttonSound
+  local leftBar = display.newGroup()
+  local packGroup = display.newGroup()
+  local body, boots, hat
+  local nameText, coinsText, statusText, packText
+  local category = AVATARS
+  local selected = 1
+  local owned = {}
+  local coins = 0
+  local currentList
+  local carousel
+  local ownsGoldFox, ownsDiamondDoe = false, false
+  local itemTrail, shownTrail, trailTimer = 1, 1, nil
+  local panelState = 1
+
+  avatar = storyboard.database.getAvatarData()
+  savedAvatar = {}
+  for i = 1, #avatar do
+    savedAvatar[i] = avatar[i]
+  end
+  selected = avatar[AVATARS]
+
+  local function playButtonSound()
+    if storyboard.database.getSound() == 1 then
+      audio.play(buttonSound)
+    end
+  end
+
+  local function owns(itemId)
+    for _, id in ipairs(owned[category]) do
+      if id == itemId then
+        return true
+      end
     end
     return false
-end
+  end
 
-local function isEquipped(category, itemId)
-    if not avatarData then return false end
-    if category == 1 then return avatarData[1] == itemId end
-    if category == 2 then return avatarData[2] == itemId end
-    if category == 3 then return avatarData[3] == itemId end
-    if category == 4 then return avatarData[4] == itemId end
-    return false
-end
-
----------------------------------------------------------------------------------
--- CREATE SCENE
----------------------------------------------------------------------------------
-function scene:createScene(event)
-    local view = self.view
-    local gui = require("modules.gui")
-    local font = storyboard.gameDataTable.font
-    local fontSize = 18
-    local textColor = {1, 1, 1, 1}
-
-    -- Load current state
-    avatarData = storyboard.database.getAvatarData() or {100, 200, 300, 400}
-    ownedItems = storyboard.database.getItems() or {{}, {}, {}, {}}
-
-    -- Ensure starter items are owned
-    if #ownedItems[1] == 0 then
-        ownedItems[1] = { 100 }  -- Fox is free
+  local function selectList(newCategory)
+    if newCategory == AVATARS then
+      currentList = accessories.getAvatarList()
+    elseif newCategory == HATS then
+      currentList = accessories.getHatList(avatar[AVATARS])
+    elseif newCategory == ITEMS then
+      currentList = accessories.getItemList(avatar[AVATARS])
+    elseif newCategory == BOOTS then
+      currentList = accessories.getBootsList(avatar[AVATARS])
     end
+  end
 
-    ---------------------------------------------------------------------------
-    -- Background (380×410, anchored top-right, shifted 90px above viewport)
-    ---------------------------------------------------------------------------
-    background = display.newImageRect("images/gui/background/marketPlace.png", 380, 410)
-    background.anchorX = 1
-    background.anchorY = 0
-    background.x = display.contentWidth
-    background.y = -90
-    view:insert(background)
-
-    ---------------------------------------------------------------------------
-    -- Left sidebar (100×410, same y offset as background)
-    ---------------------------------------------------------------------------
-    leftBar = display.newImageRect("images/gui/background/marketLeftBar.png", 100, 410)
-    leftBar.anchorX = 0
-    leftBar.anchorY = 0
-    leftBar.x = 0
-    leftBar.y = -90
-    view:insert(leftBar)
-
-    ---------------------------------------------------------------------------
-    -- Category tabs (4 buttons on left sidebar, anchorY=0 = top edge)
-    ---------------------------------------------------------------------------
-    local tabPositions = { 36, 90, 144, 199 }
-    for i = 1, 4 do
-        local tabImg = display.newImageRect("images/gui/market/categorySelected_.png", 86, 50)
-        tabImg.anchorX = 0
-        tabImg.anchorY = 0
-        tabImg.x = 5
-        tabImg.y = tabPositions[i]
-        view:insert(tabImg)
-
-        local tabLabel = display.newText({
-            text = TAB_NAMES[i],
-            x = 48,
-            y = tabPositions[i] + 25,
-            font = font,
-            fontSize = 13,
-        })
-        tabLabel:setFillColor(1, 1, 1)
-        view:insert(tabLabel)
-
-        local function onTabTap()
-            selectedCategory = i
-            selectedIndex = 1
-            scene:refreshCategory()
-            return true
-        end
-        tabImg:addEventListener("tap", onTabTap)
-        tabLabel:addEventListener("tap", onTabTap)
-
-        categoryTabs[i] = { bg = tabImg, label = tabLabel }
+  local function bringAvatarToFront()
+    if body then
+      view:insert(body)
     end
-
-    ---------------------------------------------------------------------------
-    -- Money display (matches decompiled: coin at x=120,y=45, text at x=140,y=45)
-    ---------------------------------------------------------------------------
-    coinIcon = display.newImageRect("images/gui/extra/coin.png", 15, 15)
-    coinIcon.anchorX = 0
-    coinIcon.x = 120
-    coinIcon.y = 45
-    view:insert(coinIcon)
-
-    local money = storyboard.database.getMoney() or 0
-    moneyText = display.newText(tostring(money), 0, 0, font, fontSize * 2)
-    moneyText:setFillColor(1, 1, 1)
-    moneyText.xScale = 0.5
-    moneyText.yScale = 0.5
-    moneyText.anchorX = 0
-    moneyText.x = 140
-    moneyText.y = 45
-    view:insert(moneyText)
-
-    ---------------------------------------------------------------------------
-    -- Preview area (right side) — thumbnail of selected item
-    ---------------------------------------------------------------------------
-    previewImage = display.newImageRect("images/transparent.png", PREVIEW_SIZE, PREVIEW_SIZE)
-    previewImage.x = PREVIEW_X
-    previewImage.y = PREVIEW_Y
-    view:insert(previewImage)
-
-    ---------------------------------------------------------------------------
-    -- Item name text (right of preview)
-    ---------------------------------------------------------------------------
-    itemNameText = display.newText("", 0, 0, font, fontSize * 2.4)
-    itemNameText:setFillColor(1, 1, 1)
-    itemNameText.xScale = 0.5
-    itemNameText.yScale = 0.5
-    itemNameText.x = 390
-    itemNameText.y = PREVIEW_Y - 10
-    view:insert(itemNameText)
-
-    ---------------------------------------------------------------------------
-    -- Item price / status text (below name, right side)
-    ---------------------------------------------------------------------------
-    priceIcon = display.newImageRect("images/gui/extra/coin.png", 12, 12)
-    priceIcon.x = 370
-    priceIcon.y = PREVIEW_Y + 15
-    priceIcon.isVisible = false
-    view:insert(priceIcon)
-
-    itemPriceText = display.newText("", 0, 0, font, fontSize * 2)
-    itemPriceText:setFillColor(1, 0.84, 0)
-    itemPriceText.xScale = 0.5
-    itemPriceText.yScale = 0.5
-    itemPriceText.x = 395
-    itemPriceText.y = PREVIEW_Y + 15
-    view:insert(itemPriceText)
-
-    ---------------------------------------------------------------------------
-    -- Status text (bottom center — buy result messages)
-    ---------------------------------------------------------------------------
-    statusText = display.newText("", 0, 0, font, fontSize * 2)
-    statusText:setFillColor(1, 1, 1)
-    statusText.xScale = 0.5
-    statusText.yScale = 0.5
-    statusText.x = display.contentWidth * 0.5
-    statusText.y = display.contentHeight * 0.95
-    view:insert(statusText)
-
-    ---------------------------------------------------------------------------
-    -- Buy / Equip button
-    ---------------------------------------------------------------------------
-    local function onBuyTap()
-        local item = currentList[selectedIndex]
-        if not item then return true end
-
-        local cat = selectedCategory
-        local itemId = item.id
-
-        -- Check if already equipped
-        if isEquipped(cat, itemId) then
-            statusText.text = "Already equipped!"
-            return true
-        end
-
-        -- Check if owned → equip
-        if isOwned(cat, itemId) or item.price == 0 then
-            -- Equip
-            avatarData[cat] = itemId
-            storyboard.database.setAvatarData(avatarData)
-            statusText.text = item.name .. " equipped!"
-            scene:refreshCategory()
-            return true
-        end
-
-        -- Try to buy
-        local money = storyboard.database.getMoney() or 0
-        if money < item.price then
-            statusText.text = "Not enough coins!"
-            return true
-        end
-
-        -- Purchase
-        storyboard.database.decreaseMoney(item.price)
-        storyboard.database.addItem(cat, itemId)
-        ownedItems = storyboard.database.getItems()
-
-        -- Equip immediately
-        avatarData[cat] = itemId
-        storyboard.database.setAvatarData(avatarData)
-
-        -- Update money display
-        local newMoney = storyboard.database.getMoney() or 0
-        moneyText.text = tostring(newMoney)
-
-        statusText.text = item.name .. " purchased & equipped!"
-        scene:refreshCategory()
-        return true
+    if hat then
+      view:insert(hat)
     end
+    if boots then
+      view:insert(boots)
+    end
+  end
 
-    buyButton = gui.newButton({
-        image = "images/gui/button/buy.png",
-        width = 79,
-        height = 50,
-        x = 430,
-        y = 290,
-        onRelease = onBuyTap,
-        displayGroup = view,
+  local function spawnTrailParticle()
+    local particle = createSprite.changeSpriteItem(itemTrail, view, 0)
+    particle:setFrame(math.random(5))
+    particle.x = 290
+    particle.y = 120 + math.random(-20, 20)
+    particle.xScale, particle.yScale = 0.98, 0.98
+    transition.to(particle, { time = 200, x = 236 })
+    transition.to(particle, {
+      time = 500, delay = 200, x = 180, alpha = 0, onComplete = function() display.remove(particle) end,
     })
+    bringAvatarToFront()
+  end
 
-    ---------------------------------------------------------------------------
-    -- Horizontal scroll area (item cells, bottom-anchored at y=264)
-    ---------------------------------------------------------------------------
-    scrollGroup = display.newGroup()
-    scrollGroup.x = SCROLL_X
-    scrollGroup.y = SCROLL_Y - SCROLL_H  -- bottom edge at SCROLL_Y
-    view:insert(scrollGroup)
-
-    -- Clipping background for scroll area
-    local scrollBg = display.newRect(scrollGroup, SCROLL_W * 0.5, SCROLL_H * 0.5, SCROLL_W, SCROLL_H)
-    scrollBg:setFillColor(0, 0, 0, 0.15)
-
-    scrollContent = display.newGroup()
-    scrollGroup:insert(scrollContent)
-
-    -- Drag-to-scroll (horizontal)
-    local scrollOffset = 0
-    local maxScroll = 0
-
-    scrollBg:addEventListener("touch", function(event)
-        if event.phase == "began" then
-            display.getCurrentStage():setFocus(event.target)
-            event.target._startX = event.x
-            event.target._startOffset = scrollContent.x
-        elseif event.phase == "moved" then
-            local dx = event.x - event.target._startX
-            local newX = event.target._startOffset + dx
-            newX = math.min(0, math.max(-maxScroll, newX))
-            scrollContent.x = newX
-        elseif event.phase == "ended" or event.phase == "cancelled" then
-            display.getCurrentStage():setFocus(nil)
-            scrollOffset = -scrollContent.x
-        end
-        return true
-    end)
-
-    -- Store reference to maxScroll updater
-    scene._updateMaxScroll = function(totalW)
-        maxScroll = math.max(0, totalW - SCROLL_W)
+  local function updateTrail()
+    if shownTrail ~= itemTrail then
+      shownTrail = itemTrail
+      if trailTimer then
+        timer.cancel(trailTimer)
+      end
+      if itemTrail > 1 then
+        trailTimer = timer.performWithDelay(200, spawnTrailParticle, 0)
+      end
     end
+  end
 
-    ---------------------------------------------------------------------------
-    -- Home button
-    ---------------------------------------------------------------------------
-    local function onHomeTap(event)
-        -- Save avatar on exit
-        storyboard.database.setAvatarData(avatarData)
-        require("modules.createSprite").updateAvatar(avatarData)
-        storyboard.gotoScene("scenes.mainMenu")
-        storyboard.purgeScene("scenes.marketplace")
-        return true
+  local function showPart(part, index)
+    if part == AVATARS then
+      if body then
+        display.remove(body)
+      end
+      body = createSprite.changeSpriteAvatar(index, view, 0)
+      body.x, body.y = 290, 120
+      body.xScale, body.yScale = 0.5, 0.5
+      body.timeScale = 0.4
+      body:play()
+    elseif part == HATS then
+      if hat then
+        display.remove(hat)
+      end
+      hat = createSprite.changeSpriteHat(index, view, 0)
+      hat.x, hat.y = 290, 108
+      hat.xScale, hat.yScale = 0.5, 0.5
+      hat.timeScale = 0.4
+      body:prepare("normal")
+      body:play()
+      hat:prepare("normal")
+      hat:play()
+    elseif part == ITEMS then
+      itemTrail = index
+      updateTrail()
+    elseif part == BOOTS then
+      if boots then
+        display.remove(boots)
+      end
+      boots = createSprite.changeSpriteBoots(index, view, 0)
+      boots.x, boots.y = 290, 120
+      boots.xScale, boots.yScale = 0.5, 0.5
+      boots.timeScale = 0.4
+      boots:play()
     end
+    bringAvatarToFront()
+  end
 
-    homeButton = gui.newButton({
-        image = "images/gui/button/home.png",
-        width = storyboard.gameDataTable.backButton[1],
-        height = storyboard.gameDataTable.backButton[2],
-        x = storyboard.gameDataTable.backButton[3],
-        y = storyboard.gameDataTable.backButton[4],
-        onRelease = onHomeTap,
-        displayGroup = view,
-    })
-
-    ---------------------------------------------------------------------------
-    -- Key listener (Android back)
-    ---------------------------------------------------------------------------
-    keyListener = function(event)
-        if event.keyName == "back" and event.phase == "up" then
-            onHomeTap(event)
-            return true
-        end
+  local function showItem(part, index)
+    selectList(part)
+    if nameText then
+      nameText.text = " "
+      nameText = nil
     end
-    Runtime:addEventListener("key", keyListener)
+    nameText = display.newText(currentList[index][1], 0, 0, font, FONT_SIZE * 2)
+    nameText:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
+    nameText.xScale, nameText.yScale = 0.5, 0.5
+    nameText.x, nameText.y = 290, 280
+    view:insert(nameText)
+    showPart(part, index)
+    if part ~= BOOTS then
+      showPart(BOOTS, avatar[BOOTS])
+    end
+    if part ~= HATS then
+      showPart(HATS, avatar[HATS])
+    end
+  end
 
-    ---------------------------------------------------------------------------
-    -- Initial load — show avatars
-    ---------------------------------------------------------------------------
-    scene:refreshCategory()
-end
+  local function showCoins()
+    if coinsText then
+      coinsText.text = ""
+      coinsText = nil
+    end
+    coinsText = display.newText(coins, 0, 0, font, FONT_SIZE * 2)
+    coinsText:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
+    coinsText.xScale, coinsText.yScale = 0.5, 0.5
+    coinsText.anchorX, coinsText.anchorY = 0, 0.5
+    coinsText.x, coinsText.y = 140 - extra, 45
+    view:insert(coinsText)
+  end
 
----------------------------------------------------------------------------------
--- refreshCategory — rebuild the horizontal item list and preview
----------------------------------------------------------------------------------
-function scene:refreshCategory()
-    local font = storyboard.gameDataTable.font
-
-    -- Update tab highlights
+  local function selectTab(tab)
     for i = 1, 4 do
-        local selImg = (i == selectedCategory) and "images/gui/market/categorySelected.png" or "images/gui/market/categorySelected_.png"
-        local selW = (i == selectedCategory) and 87 or 86
-        categoryTabs[i].bg:removeSelf()
-        categoryTabs[i].bg = display.newImageRect(selImg, selW, 50)
-        categoryTabs[i].bg.anchorX = 0
-        categoryTabs[i].bg.anchorY = 0
-        categoryTabs[i].bg.x = 5
-        local tabPositions = { 36, 90, 144, 199 }
-        categoryTabs[i].bg.y = tabPositions[i]
-        self.view:insert(categoryTabs[i].bg)
-        categoryTabs[i].label:toFront()
-        self.view:insert(categoryTabs[i].label)
-
-        -- Re-add tap listener
-        local idx = i
-        local function onTabTap()
-            selectedCategory = idx
-            selectedIndex = 1
-            scene:refreshCategory()
-            return true
-        end
-        categoryTabs[i].bg:addEventListener("tap", onTabTap)
-        categoryTabs[i].label:addEventListener("tap", onTabTap)
+      categoryTabs[i].alpha = i == tab and 1 or 0.05
     end
+  end
 
-    -- Get the item list for the current category
-    if selectedCategory == 1 then
-        currentList = accessories.getAvatarList()
-    elseif selectedCategory == 2 then
-        currentList = accessories.getHatList()
-    elseif selectedCategory == 3 then
-        currentList = accessories.getItemList()
-    elseif selectedCategory == 4 then
-        currentList = accessories.getBootsList()
+  local function showAvatar()
+    showItem(AVATARS, avatar[AVATARS])
+    showPart(HATS, avatar[HATS])
+    showPart(ITEMS, avatar[ITEMS])
+    showPart(BOOTS, avatar[BOOTS])
+  end
+
+  local function setOwned(isOwned)
+    if storyboard.getCurrentSceneName() == "scenes.marketplace" then
+      if isOwned then
+        buyButton.text:setFillColor(0.788235294117647, 0.7058823529411765, 0.5490196078431373)
+      else
+        buyButton.text:setFillColor(0.1411764705882353, 0.0784313725490196, 0.06274509803921569)
+      end
+      buyButton.isVisible = not isOwned
     end
+  end
 
-    -- Clear old cells
-    for i = #cellImages, 1, -1 do
-        if cellImages[i] and cellImages[i].removeSelf then
-            cellImages[i]:removeSelf()
-        end
-        cellImages[i] = nil
+  local function onPanelMoved()
+    if panelState == 3 then
+      panelState = 2
+    elseif panelState == 4 then
+      panelState = 1
     end
-    -- Remove all children from scrollContent
-    while scrollContent.numChildren > 0 do
-        local child = scrollContent[1]
-        if child then child:removeSelf() end
+  end
+
+  local function toggleCoinPacks()
+    if panelState == 2 then
+      panelState = 4
+      transition.to(view, { time = 200, y = 0, onComplete = onPanelMoved })
+    elseif panelState == 1 then
+      panelState = 3
+      packText.text = storyboard.localized.get("SelectNumberOfCoins")
+      transition.to(view, { time = 200, y = 90, onComplete = onPanelMoved })
     end
+  end
 
-    -- Build cells
-    local totalW = 0
-    for i, item in ipairs(currentList) do
-        local cellGroup = display.newGroup()
-        local cellX = (i - 1) * (CELL_SIZE + CELL_PAD)
-        cellGroup.x = cellX + CELL_SIZE * 0.5
-        cellGroup.y = SCROLL_H * 0.5
-
-        -- Cell background
-        local cellBg = display.newImageRect("images/gui/market/cellBackground.png", CELL_SIZE, CELL_SIZE)
-        cellGroup:insert(cellBg)
-
-        -- Thumbnail
-        local thumbPath = accessories.getThumbnail(selectedCategory, item)
-        local thumb = display.newImageRect(thumbPath, CELL_SIZE - 8, CELL_SIZE - 8)
-        if thumb then
-            cellGroup:insert(thumb)
-        end
-
-        -- Owned check mark or price tag
-        local owned = isOwned(selectedCategory, item.id) or item.price == 0
-        local equipped = isEquipped(selectedCategory, item.id)
-
-        if equipped then
-            -- Green border for equipped
-            local border = display.newRoundedRect(0, 0, CELL_SIZE - 2, CELL_SIZE - 2, 4)
-            border:setFillColor(0, 0, 0, 0)
-            border:setStrokeColor(0, 1, 0, 0.9)
-            border.strokeWidth = 3
-            cellGroup:insert(border)
-        elseif owned then
-            -- Subtle blue border for owned
-            local border = display.newRoundedRect(0, 0, CELL_SIZE - 2, CELL_SIZE - 2, 4)
-            border:setFillColor(0, 0, 0, 0)
-            border:setStrokeColor(0.3, 0.6, 1, 0.7)
-            border.strokeWidth = 2
-            cellGroup:insert(border)
-        else
-            -- Price tag at bottom
-            local priceBg = display.newImageRect("images/gui/market/priceBackground.png", CELL_SIZE - 4, 14)
-            priceBg.y = CELL_SIZE * 0.5 - 9
-            cellGroup:insert(priceBg)
-
-            local priceLabel = display.newText({
-                text = formatPrice(item.price),
-                x = 0,
-                y = CELL_SIZE * 0.5 - 9,
-                font = font,
-                fontSize = 18,
-            })
-            priceLabel:setFillColor(0.36, 0.22, 0.06)
-            priceLabel.xScale = 0.5
-            priceLabel.yScale = 0.5
-            cellGroup:insert(priceLabel)
-        end
-
-        -- Selection highlight
-        if i == selectedIndex then
-            local sel = display.newRoundedRect(0, 0, CELL_SIZE + 2, CELL_SIZE + 2, 4)
-            sel:setFillColor(0, 0, 0, 0)
-            sel:setStrokeColor(1, 1, 0, 1)
-            sel.strokeWidth = 3
-            cellGroup:insert(sel)
-        end
-
-        -- Tap to select
-        local ci = i
-        cellBg:addEventListener("tap", function()
-            selectedIndex = ci
-            scene:updatePreview()
-            scene:refreshCategory()
-            return true
-        end)
-
-        scrollContent:insert(cellGroup)
-        cellImages[i] = cellGroup
-        totalW = cellX + CELL_SIZE
+  local function onHome()
+    local previous = storyboard.getPrevious()
+    if previous == "scenes.postLobby" then
+      previous = "scenes.mainMenu"
     end
+    storyboard.gotoScene(previous)
+    storyboard.purgeScene("scenes.marketplace")
+  end
 
-    -- Update max scroll
-    if scene._updateMaxScroll then
-        scene._updateMaxScroll(totalW + CELL_PAD)
+  local buildCarousel
+
+  local function openCategory(tab)
+    if panelState == 2 then
+      toggleCoinPacks()
     end
-
-    -- Update preview for selected item
-    scene:updatePreview()
-end
-
----------------------------------------------------------------------------------
--- updatePreview — show the selected item's name/price/thumbnail
----------------------------------------------------------------------------------
-function scene:updatePreview()
-    local item = currentList[selectedIndex]
-    if not item then return end
-
-    -- Update thumbnail
-    if previewImage then
-        previewImage:removeSelf()
-        previewImage = nil
+    if category ~= tab then
+      setOwned(true)
+      selectTab(tab)
+      playButtonSound()
+      showPart(category, avatar[category])
+      category = tab
+      selected = avatar[tab]
+      showItem(category, avatar[tab])
+      buildCarousel()
     end
-    local thumbPath = accessories.getThumbnail(selectedCategory, item)
-    previewImage = display.newImageRect(thumbPath, PREVIEW_SIZE, PREVIEW_SIZE)
-    previewImage.x = PREVIEW_X
-    previewImage.y = PREVIEW_Y
-    self.view:insert(previewImage)
+  end
 
-    -- Update name
-    itemNameText.text = item.name or ""
-
-    -- Update price / status
-    local owned = isOwned(selectedCategory, item.id) or item.price == 0
-    local equipped = isEquipped(selectedCategory, item.id)
-
-    if equipped then
-        itemPriceText.text = "Equipped"
-        itemPriceText:setFillColor(0, 1, 0)
-        priceIcon.isVisible = false
-    elseif owned then
-        itemPriceText.text = "Owned"
-        itemPriceText:setFillColor(0.3, 0.6, 1)
-        priceIcon.isVisible = false
+  local function onBuy()
+    local itemId = accessories.getItemId(category, selected)
+    if coins < accessories.getItem(itemId).price then
+      toggleCoinPacks()
+      packText.text = storyboard.localized.get("NotEnoughCoins")
     else
-        itemPriceText.text = tostring(item.price)
-        itemPriceText:setFillColor(1, 0.84, 0)
-        priceIcon.isVisible = true
-        priceIcon.x = itemPriceText.x - (string.len(tostring(item.price)) * 4) - 10
+      storyboard.comm.setCallback(scene.onPacket)
+      storyboard.comm.buyItem(itemId)
     end
+  end
 
-    -- Clear status
-    statusText.text = ""
-
-    -- Bring UI to front
-    itemNameText:toFront()
-    itemPriceText:toFront()
-    priceIcon:toFront()
-    statusText:toFront()
-end
-
----------------------------------------------------------------------------------
--- ENTER SCENE
----------------------------------------------------------------------------------
-function scene:enterScene(event)
-    -- Refresh money
-    local money = storyboard.database.getMoney() or 0
-    if moneyText then moneyText.text = tostring(money) end
-
-    -- Re-add buy button listener
-    if buyButton then buyButton.addListener() end
-
-    -- Refresh display
-    scene:refreshCategory()
-end
-
----------------------------------------------------------------------------------
--- EXIT SCENE
----------------------------------------------------------------------------------
-function scene:exitScene(event)
-    -- Save avatar
-    if avatarData then
-        storyboard.database.setAvatarData(avatarData)
-        require("modules.createSprite").updateAvatar(avatarData)
+  local function onScrollEnd(index)
+    selected = index
+    showItem(category, selected)
+    local isOwned = owns(accessories.getItemId(category, selected))
+    setOwned(isOwned)
+    if isOwned then
+      avatar[category] = selected
+    else
+      avatar[category] = savedAvatar[category]
     end
+  end
 
-    if buyButton then buyButton.removeListener() end
-    Runtime:removeEventListener("key", keyListener)
+  function buildCarousel()
+    if carousel then
+      carousel:cleanUp()
+      carousel = nil
+    end
+    local entries = {}
+    for i = 1, #currentList do
+      local entry = currentList[i]
+      local imageName
+      if entry[2] > 199 and i == 1 then
+        imageName = "transparent"
+      else
+        imageName = entry[4]
+      end
+      local image = "images/gui/market/accessories/" .. imageName .. ".png"
+      if imageName == "goldfox" then
+        if ownsGoldFox then
+          local n = #entries + 1
+          entries[n] = { image = image, price = entry[3], bought = owns(entry[2]), index = i, tableIndex = n }
+        end
+      elseif imageName == "diamondDoe" then
+        if ownsDiamondDoe then
+          local n = #entries + 1
+          entries[n] = { image = image, price = entry[3], bought = owns(entry[2]), index = i, tableIndex = n }
+        end
+      else
+        entries[i] = {
+          image = image, price = entry[3], bought = owns(entry[2]), newItem = isNewItem(entry[2]),
+          index = i, tableIndex = i,
+        }
+      end
+    end
+    carousel = tableViewHorizontal.newList({
+      data = entries, onRelease = function() end, onScrollEnd = onScrollEnd,
+      left = 250, right = 0, width = 80, height = 80,
+      callback = function(entry)
+        local label = display.newGroup()
+        local price = " "
+        if not entry.bought then
+          price = entry.price
+          local priceBackground = display.newImageRect("images/gui/market/priceBackground.png", 53, 13)
+          priceBackground.x, priceBackground.y = 40, 82
+          label:insert(priceBackground)
+        end
+        local priceText = display.newText(price, 0, 0, font, 30)
+        priceText:setFillColor(0.3607843137254902, 0.21568627450980393, 0.06274509803921569)
+        priceText.xScale, priceText.yScale = 0.5, 0.5
+        priceText.x, priceText.y = 35, 81
+        label:insert(priceText)
+        return label
+      end,
+    })
+    carousel.anchorX, carousel.anchorY = 0, 1
+    carousel.anchorChildren = true
+    carousel.x, carousel.y = 145, 264
+    view:insert(carousel)
+    carousel:startAt(selected)
+    view:insert(leftBar)
+    view:insert(packGroup)
+  end
+
+  function scene.onPacket(packet)
+    if storyboard.getCurrentSceneName() ~= "scenes.marketplace" then
+      return
+    end
+    if packet.m == "n" then
+      if packet.p then
+        owned = storyboard.database.getItems()
+        for _, id in ipairs(owned[AVATARS]) do
+          if id == GOLD_FOX_ID then
+            ownsGoldFox = true
+          elseif id == DIAMOND_DOE_ID then
+            ownsDiamondDoe = true
+          end
+        end
+        coins = storyboard.database.getMoney()
+        setOwned(true)
+        setOwned(owns(accessories.getItemId(category, selected)))
+        buildCarousel()
+        showAvatar()
+        showCoins()
+        statusText.isVisible = false
+        addListeners()
+      end
+    elseif packet.m == "o" then
+      if packet.a == 1 then
+        coins = storyboard.database.getMoney()
+        showCoins()
+        owned = storyboard.database.getItems()
+        avatar[category] = accessories.getItem(packet.itemId).item
+        setOwned(owns(accessories.getItemId(category, selected)))
+        buildCarousel()
+        statusText.text = ""
+      elseif packet.a == 2 then
+        statusText.isVisible = true
+        statusText.text = storyboard.localized.get("CantAffordItem")
+      elseif packet.a == 3 then
+        statusText.isVisible = true
+        statusText.text = storyboard.localized.get("AlreadyOwnItem")
+      elseif packet.a == 4 then
+        statusText.isVisible = true
+        statusText.text = storyboard.localized.get("ErrorCantBuyItem")
+      end
+    elseif packet.m == "A" then
+      coins = storyboard.database.getMoney()
+      showCoins()
+    end
+  end
+
+  function cleanUp()
+    itemTrail = 0
+    if trailTimer then
+      timer.cancel(trailTimer)
+    end
+    if carousel then
+      carousel:cleanUp()
+      carousel = nil
+    end
+  end
+
+  local background = display.newImageRect("images/gui/background/marketPlace.png", 380, 410)
+  background.anchorX, background.anchorY = 1, 0
+  background.x = 480
+  background.y = -90
+  view:insert(background)
+  if extra > 0 then
+    local sheet = graphics.newImageSheet("images/gui/background/marketPlace.png", {
+      frames = { { x = 4, y = 0, width = 235, height = 250 }, { x = 140, y = 250, width = 10, height = 570 } },
+      sheetContentWidth = 760, sheetContentHeight = 820,
+    })
+    local lower = display.newImageRect(view, sheet, 2, extra + 75, 285)
+    lower.anchorX, lower.anchorY = 1, 0
+    lower.x, lower.y = 175, 35
+    local right = 102
+    while right > 100 - extra do
+      local awning = display.newImageRect(view, sheet, 1, 117.5, 125)
+      awning.anchorX, awning.anchorY = 1, 0
+      awning.x, awning.y = right, -90
+      right = right - 117.5
+    end
+  end
+  local leftBarBackground = display.newImageRect("images/gui/background/marketLeftBar.png", 100, 410)
+  leftBarBackground.anchorX, leftBarBackground.anchorY = 0, 0
+  leftBarBackground.x, leftBarBackground.y = 0, -90
+  leftBar.x = -extra
+  leftBar:insert(leftBarBackground)
+  statusText = display.newText(storyboard.localized.get("Loading"), 0, 0, font, 40)
+  statusText:setFillColor(1, 1, 1)
+  statusText.xScale, statusText.yScale = 0.5, 0.5
+  statusText.x = display.contentWidth * 0.5 - extra
+  statusText.y = display.contentHeight * 0.95
+  view:insert(statusText)
+
+  packText = display.newText(storyboard.localized.get("SelectNumberOfCoins"), 0, 0, font, 15)
+  packText.x = display.contentWidth * 0.5
+  packText.y = 4
+  packText:setFillColor(0, 0, 0)
+  packGroup:insert(packText)
+  loader = loadingAnimation.newLoadingAnimation()
+  packGroup:insert(loader.displayGroup)
+  loader.displayGroup.x = display.contentWidth * 0.5
+  loader.displayGroup.y = 35
+  local PACK_IMAGES = { 200, 500, 2000, 5000 }
+
+  local function onPurchased(result)
+    if packText then
+      if result.message then
+        packText.text = result.message
+        if result.value and result.value > -1 then
+          coins = result.value
+          showCoins()
+        end
+      end
+    end
+  end
+
+  local function buyPack(pack)
+    packText.text = storyboard.localized.get("Purchasing")
+    timer.performWithDelay(600, function()
+      if storyboard.getCurrentSceneName() == "scenes.marketplace" then
+        storyboard.comm.addMoney(pack, onPurchased)
+      end
+    end, 1)
+  end
+
+  local function showPacks()
+    local priceTexts = {}
+    for pack = 1, 4 do
+      packButtons[pack] = gui.newButton({
+        image = "images/transparent.png", over = "images/gui/market/buyOver" .. PACK_IMAGES[pack] .. ".png",
+        onRelease = function()
+          buyPack(pack)
+          return true
+        end,
+        width = 95, height = 40, x = 0, y = 0, displayGroup = packGroup,
+      })
+      local shift = pack > 1 and extra or 0
+      packButtons[pack].setPosition(119.5 * pack - 60 + shift, 36)
+      packButtons[pack].addListener()
+      packGroup:insert(packButtons[pack])
+      packButtons[pack].isVisible = false
+      priceTexts[pack] = display.newText(storyboard.localized.get("Loading"), 0, 0, font, 18)
+      priceTexts[pack]:setFillColor(0, 0, 0)
+      priceTexts[pack].x = 120 * pack - 60 + shift
+      priceTexts[pack].y = 68
+      packGroup:insert(priceTexts[pack])
+    end
+    loader.stopLoader()
+    if storyboard.config.freeCoinPacks then
+      for pack = 1, 4 do
+        packButtons[pack].isVisible = true
+        priceTexts[pack].text = storyboard.localized.get("Free")
+      end
+    else
+      for pack = 1, 4 do
+        priceTexts[pack].isVisible = false
+      end
+      packText.text = storyboard.localized.get("InAppNotSupported")
+    end
+  end
+  timer.performWithDelay(100, function()
+    if storyboard.getCurrentSceneName() == "scenes.marketplace" then
+      showPacks()
+    end
+  end, 1)
+  view:insert(packGroup)
+  packGroup.x = -extra
+  packGroup.y = -80
+
+  local coinIcon = display.newImageRect("images/gui/extra/coin.png", 15, 15)
+  coinIcon.anchorX, coinIcon.anchorY = 0, 0.5
+  coinIcon.x, coinIcon.y = 120 - extra, 45
+  view:insert(coinIcon)
+
+  local TAB_IMAGES = {
+    "images/gui/market/categorySelected.png", "images/gui/market/categorySelected.png",
+    "images/gui/market/categorySelected_.png", "images/gui/market/categorySelected_.png",
+  }
+  local TAB_WIDTHS = { 87, 87, 86, 86 }
+  local TAB_Y = { 36, 90, 144, 199 }
+  for tab = 1, 4 do
+    local marker = display.newImageRect(TAB_IMAGES[tab], TAB_WIDTHS[tab], 50)
+    marker.anchorX, marker.anchorY = 0, 0
+    marker.tap = function() openCategory(tab) end
+    marker.x, marker.y = 5, TAB_Y[tab]
+    marker.alpha = 0.001
+    leftBar:insert(marker)
+    categoryTabs[tab] = marker
+  end
+  homeButton = gui.newButton({
+    image = "images/gui/button/home.png",
+    width = storyboard.gameDataTable.backButton[1], height = storyboard.gameDataTable.backButton[2],
+    onRelease = onHome,
+    x = storyboard.gameDataTable.backButton[3], y = storyboard.gameDataTable.backButton[4],
+    displayGroup = leftBar,
+  })
+  getMoreButton = gui.newButton({
+    image = "images/transparent.png", over = "images/gui/button/inAppOver.png",
+    text = {
+      string = storyboard.localized.get("GetMore"), size = 20, languageSizes = { fr = 14, es = 16, ja = 10, de = 16 },
+      x = -15, color = { 0.3176470588235294, 0.15294117647058825, 0 },
+    },
+    width = 121, height = 45, onRelease = toggleCoinPacks, x = 413.5, y = 56.5, displayGroup = view,
+  })
+  buyButton = gui.newButton({
+    image = "images/gui/button/buy.png",
+    text = {
+      string = storyboard.localized.get("Buy"), size = 35, languageSizes = { fr = 23, es = 22, ja = 25, de = 25 },
+      color = { 0.39215686274509803, 0.39215686274509803, 0.39215686274509803 },
+    },
+    width = 79, height = 50, onRelease = onBuy, x = 430, y = 290, displayGroup = view,
+  })
+  view:insert(leftBar)
+
+  selectTab(AVATARS)
+  selectList(AVATARS)
+  setOwned(true)
+  storyboard.comm.setCallback(scene.onPacket)
 end
 
----------------------------------------------------------------------------------
--- DESTROY SCENE
----------------------------------------------------------------------------------
-function scene:destroyScene(event)
-    background = nil
-    leftBar = nil
-    homeButton = nil
-    moneyText = nil
-    coinIcon = nil
-    itemNameText = nil
-    itemPriceText = nil
-    priceIcon = nil
-    statusText = nil
-    buyButton = nil
-    previewImage = nil
-    scrollGroup = nil
-    scrollContent = nil
-    categoryTabs = {}
-    cellImages = {}
-    currentList = {}
-    avatarData = nil
-    ownedItems = nil
-    keyListener = nil
+function scene:enterScene()
+  local backKeyEnabled, backPressed = false, false
+  storyboard.tcpSocial.setReceiveInterval(50)
+  storyboard.comm.getMyItems()
+
+  function onFrame()
+    if backPressed then
+      backPressed = false
+      backKeyEnabled = false
+      local previous = storyboard.getPrevious()
+      if previous == "scenes.postLobby" then
+        previous = "scenes.mainMenu"
+      end
+      storyboard.gotoScene(previous)
+      storyboard.purgeScene("scenes.marketplace")
+    end
+  end
+
+  function onKey(event)
+    if event.phase == "up" and event.keyName == "back" then
+      if backKeyEnabled then
+        backPressed = true
+      end
+      return true
+    end
+    return false
+  end
+
+  function addListeners()
+    if storyboard.getCurrentSceneName() == "scenes.marketplace" then
+      buyButton.addListener()
+      getMoreButton.addListener()
+      for tab = 1, 4 do
+        categoryTabs[tab]:addEventListener("tap", categoryTabs[tab])
+      end
+    end
+  end
+
+  timer.performWithDelay(200, function()
+    if storyboard.getCurrentSceneName() == "scenes.marketplace" then
+      homeButton.addListener()
+      backKeyEnabled = true
+    end
+  end, 1)
+  Runtime:addEventListener("key", onKey)
+  Runtime:addEventListener("enterFrame", onFrame)
+end
+
+function scene:exitScene()
+  local changed = false
+  for i = 1, #savedAvatar do
+    if savedAvatar[i] ~= avatar[i] then
+      changed = true
+    end
+  end
+  if changed then
+    storyboard.comm.setAvatarData(avatar)
+  end
+  createSprite.updateAvatar(avatar)
+  storyboard.tcpSocial.setReceiveInterval(nil)
+  if loader then
+    loader.stopLoader()
+  end
+  for _, button in pairs(packButtons) do
+    button.removeListener()
+  end
+  cleanUp()
+  buyButton.removeListener()
+  getMoreButton.removeListener()
+  for tab = 1, 4 do
+    categoryTabs[tab]:removeEventListener("tap", categoryTabs[tab])
+  end
+  homeButton.removeListener()
+  Runtime:removeEventListener("key", onKey)
+  Runtime:removeEventListener("enterFrame", onFrame)
+  storyboard.comm.setCallback(function() end)
+end
+
+function scene:destroyScene()
+  homeButton, getMoreButton, buyButton = nil, nil, nil
+  categoryTabs, packButtons = {}, {}
+  loader, avatar, savedAvatar = nil, nil, nil
+  addListeners, cleanUp, scene.onPacket = nil, nil, nil
 end
 
 scene:addEventListener("createScene", scene)
