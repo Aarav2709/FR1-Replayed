@@ -1,6 +1,9 @@
 -- the race. local simulation, bots or lan players.
 
 local storyboard = require("modules.storyboard")
+local pcMode = require("modules.pcMode")
+local pcSettings = require("modules.pcSettings")
+local gui = require("modules.gui")
 local physics = require("physics")
 local map = require("modules.map")
 local powerUps = require("modules.powerUps")
@@ -11,7 +14,7 @@ local lan = require("modules.lan")
 local scene = storyboard.newScene()
 
 local skyGroup, cloudGroup, mountainGroup, nearGroup, gameGroup, foregroundGroup
-local selfArrow, ninjaArrow, homeButton, positionText, jumpHint, powerUpHint
+local selfArrow, ninjaArrow, homeButton, positionText
 local jumpArea, jumpButton, powerUpArea, powerUpButton
 local countdownImage
 local placeNames
@@ -77,6 +80,7 @@ function scene:createScene()
   if tutorial then
     jumpButton.alpha = 0
   end
+  jumpButton.isVisible = not pcMode.isPC
   powerUpArea = display.newImageRect("images/transparent.png", 150, 150)
   powerUpArea.x = display.screenOriginX + powerUpArea.width * 0.5
   powerUpArea.y = display.contentHeight - powerUpArea.height * 0.5
@@ -87,21 +91,6 @@ function scene:createScene()
   view:insert(powerUpButton)
   if tutorial then
     powerUpButton.alpha = 0
-  end
-  if isPC then
-    local function newHint(text, button)
-      local hint = display.newText(text, 0, 0, font, 28)
-      hint:setFillColor(1, 1, 1)
-      hint.xScale, hint.yScale = 0.5, 0.5
-      hint.x, hint.y = button.x, button.y - 40
-      view:insert(hint)
-      return hint
-    end
-    jumpHint = newHint("SPACE", jumpButton)
-    powerUpHint = newHint("X", powerUpButton)
-    if tutorial then
-      jumpHint.alpha, powerUpHint.alpha = 0, 0
-    end
   end
 
   placeNames = {
@@ -578,6 +567,68 @@ function scene:enterScene()
     end
   end
 
+  local raceMenu, resumeButton, quitButton
+
+  local function closeRaceMenu()
+    if raceMenu then
+      resumeButton.removeListener()
+      quitButton.removeListener()
+      display.remove(raceMenu)
+      raceMenu, resumeButton, quitButton = nil, nil, nil
+    end
+    storyboard.raceMenuOpen = false
+  end
+
+  local function quitRace()
+    closeRaceMenu()
+    if not ended then
+      reportQuit()
+      stopGame()
+      timer.performWithDelay(200, leaveGame, 1)
+    end
+  end
+
+  local function showRaceMenu()
+    if raceMenu or ended then
+      return
+    end
+    storyboard.raceMenuOpen = true
+    raceMenu = display.newGroup()
+    view:insert(raceMenu)
+    local dim = display.newRect(raceMenu, display.contentCenterX, display.contentCenterY,
+      display.actualContentWidth + 4, display.actualContentHeight + 4)
+    dim:setFillColor(0, 0, 0, 0.6)
+    dim:addEventListener("touch", function() return true end)
+    local panel = display.newGroup()
+    raceMenu:insert(panel)
+    panel.x, panel.y = display.contentCenterX, display.contentCenterY
+    display.newImageRect(panel, "images/gui/background/settingsWall1.png", 300, 150)
+    display.newText(panel, "Race Menu", 0, -42, font, 26)
+    resumeButton = gui.newButton({
+      image = "images/gui/button/blank.png", text = { string = "Resume", size = 20 },
+      width = 110, height = 50, x = -62, y = 20, displayGroup = panel, onRelease = closeRaceMenu,
+    })
+    quitButton = gui.newButton({
+      image = "images/gui/button/blank.png", text = { string = storyboard.localized.get("Quit"), size = 20 },
+      width = 110, height = 50, x = 62, y = 20, displayGroup = panel, onRelease = quitRace,
+    })
+    resumeButton.addListener()
+    quitButton.addListener()
+    require("modules.keyboardNav").setFocus(resumeButton)
+  end
+
+  local function requestQuit()
+    if pcMode.isPC then
+      if raceMenu then
+        closeRaceMenu()
+      else
+        showRaceMenu()
+      end
+    else
+      askQuit()
+    end
+  end
+
   function onMessage(message)
     if ended or not message or not message.m then
       return
@@ -676,7 +727,7 @@ function scene:enterScene()
 
   local function onHomeTouch(_, event)
     if event.phase == "began" then
-      askQuit()
+      requestQuit()
     end
   end
 
@@ -691,16 +742,16 @@ function scene:enterScene()
   local function onFrame()
     if backPressed then
       backPressed = false
-      askQuit()
+      requestQuit()
     end
   end
 
   local function onKey(event)
-    if event.phase == "down" and ended == false and raceStarted then
-      if event.keyName == "space" then
+    if event.phase == "down" and ended == false and raceStarted and not raceMenu then
+      if pcSettings.matchesKey("jump", event.keyName) then
         onJumpTouch(nil, { phase = "began" })
         return true
-      elseif event.keyName == "x" then
+      elseif pcSettings.matchesKey("power", event.keyName) then
         onPowerUpTouch(nil, { phase = "began" })
         return true
       end
@@ -733,10 +784,6 @@ function scene:enterScene()
     view:insert(jumpArea)
     view:insert(jumpButton)
     view:insert(powerUpButton)
-    if jumpHint then
-      view:insert(jumpHint)
-      view:insert(powerUpHint)
-    end
     if powerUpIcon then
       view:insert(powerUpIcon)
     end
@@ -744,6 +791,7 @@ function scene:enterScene()
 
   function cleanUp()
     ended = true
+    closeRaceMenu()
     cancelTimers()
     if lanMode then
       lan.setHandler(nil)
@@ -883,14 +931,8 @@ function scene:enterScene()
     tutorialModule.setFunctions(function()
       jumpArea.alpha = 1
       jumpButton.alpha = 1
-      if jumpHint then
-        jumpHint.alpha = 1
-      end
     end, function()
       powerUpButton.alpha = 1
-      if powerUpHint then
-        powerUpHint.alpha = 1
-      end
     end)
   end
   bringControlsToFront()

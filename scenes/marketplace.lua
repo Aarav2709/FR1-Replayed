@@ -565,6 +565,37 @@ function scene:createScene()
   selectList(AVATARS)
   setOwned(true)
   storyboard.comm.setCallback(scene.onPacket)
+
+  function scene.navHandler(key, event)
+    if not scene.ready then
+      return key ~= "back"
+    end
+    if key == "left" or key == "right" then
+      if carousel and carousel.step then
+        carousel:step(key == "right" and 1 or -1)
+      end
+      return true
+    elseif key == "up" or key == "down" then
+      local target = category + (key == "down" and 1 or -1)
+      if target >= 1 and target <= 4 and not (event and event.isRepeat) then
+        openCategory(target)
+      end
+      return true
+    elseif key == "enter" or key == "numPadEnter" then
+      local focus = require("modules.keyboardNav").getFocus()
+      if (focus == nil or focus == buyButton) and buyButton.isVisible then
+        onBuy()
+        return true
+      end
+      return false
+    end
+    local digit = tonumber(key)
+    if digit and digit >= 1 and digit <= 4 then
+      openCategory(digit)
+      return true
+    end
+    return false
+  end
 end
 
 function scene:enterScene()
@@ -597,6 +628,7 @@ function scene:enterScene()
 
   function addListeners()
     if storyboard.getCurrentSceneName() == "scenes.marketplace" then
+      scene.ready = true
       buyButton.addListener()
       getMoreButton.addListener()
       for tab = 1, 4 do
@@ -613,9 +645,12 @@ function scene:enterScene()
   end, 1)
   Runtime:addEventListener("key", onKey)
   Runtime:addEventListener("enterFrame", onFrame)
+  storyboard.navHandler = scene.navHandler
 end
 
 function scene:exitScene()
+  storyboard.navHandler = nil
+  scene.ready = false
   local changed = false
   for i = 1, #savedAvatar do
     if savedAvatar[i] ~= avatar[i] then

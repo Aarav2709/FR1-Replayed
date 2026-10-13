@@ -32,6 +32,7 @@ function scene:createScene()
   addCentered(storyboard.localized.get("Credits"), 21, 32)
   addCentered("Aarav Gupta", 18, 78)
   addCentered("aarav2709.github.io", 13, 108)
+  addCentered("Rocxteady", 18, 140)
 
   local function addText(text, size, y)
     local label = display.newText(text, 0, 0, font, size)

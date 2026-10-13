@@ -3,12 +3,20 @@ settings = {
     default = "landscapeRight",
     supported = { "landscapeLeft", "landscapeRight" },
   },
+  win32 = {
+    singleInstance = true,
+  },
   window = {
+    defaultMode = "fullscreen",
     defaultViewWidth = 1080,
     defaultViewHeight = 1920,
     resizable = true,
     minViewWidth = 320,
     minViewHeight = 480,
+    enableMaximizeButton = true,
+    enableMinimizeButton = true,
+    enableCloseButton = true,
+    suspendWhenMinimized = true,
     titleText = { default = "Fun Run 1: Replayed" },
   },
   android = {
@@ -21,12 +29,16 @@ settings = {
     },
   },
   iphone = {
+    xcassets = "iOSResources/Images.xcassets",
     plist = {
       UIStatusBarHidden = true,
       UIPrerenderedIcon = true,
     },
   },
   excludeFiles = {
-    all = { "DecompiledCode", "tools", "*.md", ".gitignore", "LICENSE", "autotest.cfg" },
+    all = { "DecompiledCode", "tools", "*.md", "*.bat", ".gitignore", "LICENSE", "autotest.cfg" },
+    android = { "Icon-win32.ico", "iOSResources/*" },
+    iphone = { "Icon-win32.ico", "AndroidResources/*" },
+    win32 = { "AndroidResources/*", "iOSResources/*" },
   },
 }

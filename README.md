@@ -20,11 +20,13 @@ LAN races use UDP port 23400 to find games and TCP port 23401 for the race. On W
 
 * Android
 * iOS
-* PC (use Escape to go back, Space to jump and X for power ups)
+* PC (use the arrow keys and Enter or the mouse for menus, Escape to go back, Space to jump and X for power ups)
+
+On PC the game opens in fullscreen with a PC main menu. Press F11 to switch between fullscreen and a window, and Escape during a race to open the race menu. In the shop, Left and Right browse items, Up and Down change the category and the mouse wheel scrolls. Settings has a PC page for fullscreen, the window size and the jump and power up keys.
 
 ## Run
 
-Open `main.lua` in the [Solar2D](https://solar2d.com/) simulator, or build it for your platform.
+Open `main.lua` in the [Solar2D](https://solar2d.com/) simulator, or build it for your platform. `PCMode.bat` opens the simulator with the PC layout and controls, and `ResetData.bat` deletes the simulator save so you can start over.
 
 ## Community
 
@@ -33,6 +35,7 @@ Join our [Discord Server](https://discord.gg/k8XM2k23kd) for announcements, upda
 ## Credits
 
 * Aarav Gupta: Creator
+* Rocxteady: iOS Support
 
 ## Assets and Attribution
 

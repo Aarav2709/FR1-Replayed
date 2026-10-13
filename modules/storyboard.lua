@@ -258,6 +258,10 @@ function storyboard.getCurrentSceneName()
   return currentSceneName
 end
 
+function storyboard.getOverlay()
+  return overlayScene
+end
+
 local function transitionIn(view, effect, time, blocker, outgoing, params)
   local function onComplete()
     blocker.isHitTestable = false

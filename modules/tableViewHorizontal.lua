@@ -276,6 +276,11 @@ function M.newList(params)
   end
 
   function list:cleanUp()
+    if self.stepTimer then
+      timer.cancel(self.stepTimer)
+      self.stepTimer = nil
+    end
+    self.stepTarget = nil
     Runtime:removeEventListener("enterFrame", scrollList)
     Runtime:removeEventListener("enterFrame", showHighlight)
     Runtime:removeEventListener("enterFrame", trackVelocity)
@@ -294,6 +299,38 @@ function M.newList(params)
 
   function list:startAt(index)
     self.x = CENTER_X - self[1].width * (index - 1)
+  end
+
+  -- move one item left or right, then select it once the glide settles.
+  function list:step(direction)
+    if not self[1] or not self.parent then
+      return
+    end
+    local cellWidth = self[1].width
+    local current = self.stepTarget or (math.floor((CENTER_X - self.x) / cellWidth + 0.5) + 1)
+    local target = math.max(1, math.min(current + direction, self.numChildren))
+    if target == current then
+      return
+    end
+    self.stepTarget = target
+    velocity = 0
+    Runtime:removeEventListener("enterFrame", scrollList)
+    if self.tween then
+      transition.cancel(self.tween)
+    end
+    self.tween = transition.to(self, { time = 160, x = CENTER_X - cellWidth * (target - 1), transition = easing.outQuad })
+    if self.stepTimer then
+      timer.cancel(self.stepTimer)
+    end
+    local strip = self
+    self.stepTimer = timer.performWithDelay(200, function()
+      strip.stepTimer = nil
+      local chosen = strip.stepTarget
+      strip.stepTarget = nil
+      if chosen and strip.parent then
+        onScrollEnd(chosen)
+      end
+    end, 1)
   end
 
   return list

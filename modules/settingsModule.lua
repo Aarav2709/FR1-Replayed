@@ -2,6 +2,7 @@
 
 local storyboard = require("modules.storyboard")
 local gui = require("modules.gui")
+local pcMode = require("modules.pcMode")
 
 local M = {}
 
@@ -10,6 +11,11 @@ function M.create()
   local WIDTH, HEIGHT = 112, 50
   local scale = display.contentWidth / 480
   local LEFT, Y, SPACING = 160 * scale, 290, 120 * scale
+  if pcMode.isPC then
+    LEFT = 150
+    SPACING = (display.contentWidth - 60 - LEFT) / 3
+    WIDTH = math.min(WIDTH, SPACING - 6)
+  end
 
   local general = gui.newButton({
     image = "images/gui/button/general.png", width = WIDTH, height = HEIGHT,
@@ -27,16 +33,25 @@ function M.create()
     x = LEFT + 2 * SPACING, y = Y, displayGroup = group,
   })
 
+  local buttons = { account, general, help }
+  if pcMode.isPC then
+    buttons[#buttons + 1] = gui.newButton({
+      image = "images/gui/button/blank.png", text = { string = "PC", size = 24 }, width = WIDTH * 0.75, height = HEIGHT,
+      onRelease = function() storyboard.showOverlay("scenes.pcSettings", { isModal = true }) end,
+      x = LEFT + 3 * SPACING, y = Y, displayGroup = group,
+    })
+  end
+
   function group.addButtonListeners()
-    account.addListener()
-    general.addListener()
-    help.addListener()
+    for _, button in ipairs(buttons) do
+      button.addListener()
+    end
   end
 
   function group.removeButtonListeners()
-    account.removeListener()
-    general.removeListener()
-    help.removeListener()
+    for _, button in ipairs(buttons) do
+      button.removeListener()
+    end
   end
 
   function group.clean()

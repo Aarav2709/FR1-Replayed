@@ -15,8 +15,6 @@ function timer.cancel(handle)
   end
 end
 
-isPC = system.getInfo("platform") == "win32" or system.getInfo("platform") == "macos"
-
 Runtime:addEventListener("key", function(event)
   if event.keyName == "escape" then
     Runtime:dispatchEvent({ name = "key", phase = event.phase, keyName = "back" })
@@ -106,6 +104,22 @@ local function initializeGame()
   storyboard.tcpSocial = require("modules.tcpSocial")
   storyboard.comm = require("modules.communicationModule")
   storyboard.lan = require("modules.lan")
+
+  local pcMode = require("modules.pcMode")
+  if pcMode.isDesktop or pcMode.isPC then
+    require("modules.keyboardNav").start()
+  end
+  if pcMode.isPC then
+    require("modules.pcSettings").apply()
+  end
+
+  local savedAccount = require("modules.offline.serverData").getAccount()
+  if not database.getPlayerInformation() and savedAccount then
+    database.setPlayerInformation(savedAccount.username, savedAccount.playerId, savedAccount.token)
+    if #database.getAvatarData() == 0 then
+      database.setAvatarData({ 1, 1, 1, 1 })
+    end
+  end
 
   if database.getPlayerInformation() then
     storyboard.gotoScene("scenes.loadingScene")

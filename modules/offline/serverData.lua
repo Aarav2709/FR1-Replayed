@@ -7,11 +7,43 @@ local serverData = {}
 serverData.START_COINS = 0
 
 local FILE = "offline_server.json"
+local PREVIOUS = FILE .. ".previous"
+local TEMP = FILE .. ".tmp"
+local SAVE_VERSION = 2
 local data
+
+-- steps that upgrade an older save. key is the version a step upgrades to.
+local MIGRATIONS = {}
+
+local function pathOf(name)
+  return system.pathForFile(name, system.DocumentsDirectory)
+end
+
+local function exists(name)
+  local file = io.open(pathOf(name), "rb")
+  if file then
+    file:close()
+    return true
+  end
+  return false
+end
+
+local function readSave(name)
+  local file = io.open(pathOf(name), "rb")
+  if not file then
+    return nil
+  end
+  local text = file:read("*a")
+  file:close()
+  local ok, decoded = pcall(json.decode, text)
+  if ok and type(decoded) == "table" and type(decoded.accounts) == "table" then
+    return decoded
+  end
+end
 
 local function defaults()
   return {
-    version = 2,
+    version = SAVE_VERSION,
     seed = os.time(),
     nextPlayerId = 2000000,
     accounts = {},
@@ -43,22 +75,28 @@ function serverData.load()
   if data then
     return data
   end
-  local path = system.pathForFile(FILE, system.DocumentsDirectory)
-  local file = io.open(path, "r")
-  if file then
-    local ok, decoded = pcall(json.decode, file:read("*a"))
-    file:close()
-    if ok and type(decoded) == "table" then
-      data = decoded
-    end
-  end
+  data = readSave(FILE) or readSave(PREVIOUS) or readSave(TEMP)
   if not data then
+    if exists(FILE) then
+      os.rename(pathOf(FILE), pathOf(FILE .. ".damaged-" .. os.time()))
+    end
     data = defaults()
+  end
+  local version = tonumber(data.version) or 1
+  if version < SAVE_VERSION then
+    for target = version + 1, SAVE_VERSION do
+      if MIGRATIONS[target] then
+        MIGRATIONS[target](data)
+      end
+    end
   end
   for key, value in pairs(defaults()) do
     if data[key] == nil then
       data[key] = value
     end
+  end
+  if version < SAVE_VERSION then
+    data.version = SAVE_VERSION
   end
   return data
 end
@@ -67,11 +105,22 @@ function serverData.save()
   if not data then
     return
   end
-  local path = system.pathForFile(FILE, system.DocumentsDirectory)
-  local file = io.open(path, "w")
-  if file then
-    file:write(json.encode(data))
-    file:close()
+  local text = json.encode(data)
+  local file = io.open(pathOf(TEMP), "wb")
+  if not file then
+    return
+  end
+  local written = file:write(text)
+  file:close()
+  if not written or not readSave(TEMP) then
+    return
+  end
+  if exists(FILE) then
+    os.remove(pathOf(PREVIOUS))
+    os.rename(pathOf(FILE), pathOf(PREVIOUS))
+  end
+  if not os.rename(pathOf(TEMP), pathOf(FILE)) then
+    os.rename(pathOf(PREVIOUS), pathOf(FILE))
   end
 end
 
