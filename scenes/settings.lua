@@ -46,7 +46,7 @@ function scene:createScene()
   local usernameLabel = addText(storyboard.localized.get("Username"), FONT_SIZE * 2, 16)
   local username = addText(storyboard.playerInfo.username, LARGE_SIZE * 2.6, usernameLabel.y + 36)
   local gameName = addText("Fun Run 1: Replayed", FONT_SIZE * 2, username.y + 70)
-  addText("v1.0.0", FONT_SIZE * 2, gameName.y + 30)
+  addText("v1.0.1", FONT_SIZE * 2, gameName.y + 30)
 
   local footer = display.newImageRect("images/gui/background/settings.png", 480, 120)
   footer.anchorX, footer.anchorY = 0.5, 1

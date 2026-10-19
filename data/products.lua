@@ -72,14 +72,14 @@ return {
     {
       "Diamond Doe",
       198,
-      999999999,
+      1500000,
       "diamondDoe",
       "diamondDoeHeadSprite",
       "diamondDoeBodySprite",
       "diamondDoeFeet",
       "diamondDoeEffectSprite",
     },
-    { "Golden Fox", 199, 9999999999, "goldfox", "goldfoxHeadSprite", "goldfoxBodySprite", "goldfoxFeet", "goldfoxEffectSprite" },
+    { "Golden Fox", 199, 2000000, "goldfox", "goldfoxHeadSprite", "goldfoxBodySprite", "goldfoxFeet", "goldfoxEffectSprite" },
   },
   {
     { "Nothing", 200, 0 },

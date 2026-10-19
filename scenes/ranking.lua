@@ -5,11 +5,13 @@ local gui = require("modules.gui")
 local createSprite = require("modules.createSprite")
 local tableView = require("modules.tableView")
 local loadingAnimation = require("modules.loadingAnimation")
+local adaptiveUI = require("modules.adaptiveUI")
 
 local scene = storyboard.newScene()
 
 local WEEKLY, TOP = 1, 3
 local RIGHT_SHIFT = display.contentWidth - 480
+local PANEL_SHIFT = RIGHT_SHIFT * 0.5
 
 local homeButton
 local weeklyTab, topTab
@@ -30,8 +32,10 @@ function scene:createScene()
   local SELECTED = { 0.4392156862745098, 0.25098039215686274, 0.18823529411764706, 1 }
   local LIST_COLOR = { 0.9529411764705882, 0.8980392156862745, 0.803921568627451 }
   local STAR_LIMITS = { 1, 10, 50 }
-  local AVATAR_X, AVATAR_Y = 100, 178
-  local STATS_X = 115
+  local _, AVATAR_Y = adaptiveUI.coverPoint(100, 178)
+  local AVATAR_X = 100 + PANEL_SHIFT
+  local STATS_X = 115 + PANEL_SHIFT
+  local LEFT_X = 10 + PANEL_SHIFT
   local buttonSound = storyboard.gameDataTable.sounds.buttonSound
   local body, hat, boots
   local statTexts = {}
@@ -169,7 +173,7 @@ function scene:createScene()
     title.x, title.y = STATS_X, 25
     view:insert(title)
     statTexts.name = title
-    addStat("games", storyboard.localized.get("Games") .. games, 10, 70)
+    addStat("games", storyboard.localized.get("Games") .. games, LEFT_X, 70)
     if games == 0 then
       games = 1
     end
@@ -178,13 +182,13 @@ function scene:createScene()
     if dot ~= nil then
       winRate = winRate:sub(0, dot + 2)
     end
-    addStat("wins", storyboard.localized.get("Wins") .. winRate .. "%", 10, 90)
+    addStat("wins", storyboard.localized.get("Wins") .. winRate .. "%", LEFT_X, 90)
     local killsText = addStat("kills", storyboard.localized.get("Kills") .. kills, STATS_X, 70)
     local deathsText = addStat("deaths", storyboard.localized.get("Deaths") .. deaths, STATS_X, 90)
     local suicidesText = addStat("suicides", storyboard.localized.get("Suicides") .. suicides, STATS_X, 110)
     if storyboard.localized.language == "ja" then
       suicidesText.y = 90
-      deathsText.x = 10
+      deathsText.x = LEFT_X
       deathsText.y = 110
       killsText.y = 70
     end
@@ -200,7 +204,7 @@ function scene:createScene()
       messageText:setFillColor(WHITE[1], WHITE[2], WHITE[3], WHITE[4])
       messageText.xScale, messageText.yScale = 0.5, 0.5
       messageText.anchorX, messageText.anchorY = 0, 1
-      messageText.x = 15
+      messageText.x = 15 + PANEL_SHIFT
       messageText.y = display.contentHeight * 0.5
       view:insert(messageText)
     end
@@ -459,7 +463,7 @@ function scene:createScene()
   end
 
   view:insert(prizeGroup)
-  prizeGroup.x, prizeGroup.y = 100, 245
+  prizeGroup.x, prizeGroup.y = 100 + PANEL_SHIFT, 245
   loader = loadingAnimation.newLoadingAnimation()
   view:insert(loader.displayGroup)
   loader.displayGroup.x = display.contentWidth * 0.75

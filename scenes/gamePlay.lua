@@ -22,6 +22,8 @@ local quitAlert
 local cleanUp
 
 local PLAYER_SCREEN_X, PLAYER_SCREEN_Y = 150, 204
+-- wide screens zoom in around the player so the view stays close to the original 480 wide one.
+local ZOOM = math.max(1, math.sqrt(display.actualContentWidth / 480))
 local PROGRESS_BAR_WIDTH = 340
 local PROGRESS_BAR_LEFT = (display.contentWidth - PROGRESS_BAR_WIDTH) * 0.5
 local FINISH_TIMEOUT = 30000
@@ -45,12 +47,15 @@ function scene:createScene()
   view:insert(gameGroup)
   foregroundGroup = display.newGroup()
   view:insert(foregroundGroup)
+  for _, group in ipairs({ cloudGroup, mountainGroup, nearGroup, gameGroup, foregroundGroup }) do
+    group.xScale, group.yScale = ZOOM, ZOOM
+  end
 
   selfArrow = display.newImageRect("images/game/selfArrow.png", 15, 15)
-  selfArrow.x, selfArrow.y = 150, 160
+  selfArrow.x, selfArrow.y = PLAYER_SCREEN_X, PLAYER_SCREEN_Y - 44 * ZOOM
   view:insert(selfArrow)
   ninjaArrow = display.newImageRect("images/game/powerup/ninja/arrow.png", 15, 15)
-  ninjaArrow.x, ninjaArrow.y = 150, 160
+  ninjaArrow.x, ninjaArrow.y = PLAYER_SCREEN_X, PLAYER_SCREEN_Y - 44 * ZOOM
   ninjaArrow.alpha = 0
   view:insert(ninjaArrow)
 
@@ -318,6 +323,11 @@ function scene:enterScene()
     return false
   end
 
+  local function placeLayer(group, x, y)
+    group.x = PLAYER_SCREEN_X + (x - PLAYER_SCREEN_X) * ZOOM
+    group.y = PLAYER_SCREEN_Y + (y - PLAYER_SCREEN_Y) * ZOOM
+  end
+
   local function updateCamera()
     if ended or not me or not me.x or not gameGroup then
       return
@@ -329,16 +339,11 @@ function scene:enterScene()
         return
       end
     end
-    gameGroup.x = -me.x + PLAYER_SCREEN_X
-    gameGroup.y = -me.y + PLAYER_SCREEN_Y
-    foregroundGroup.x = -me.x + PLAYER_SCREEN_X
-    foregroundGroup.y = -me.y + PLAYER_SCREEN_Y
-    nearGroup.x = -me.x * 0.8
-    nearGroup.y = -me.y * 0.8
-    mountainGroup.x = -me.x * 0.2
-    mountainGroup.y = -me.y * 0.2
-    cloudGroup.x = -me.x * 0.05
-    cloudGroup.y = -me.y * 0.05
+    placeLayer(gameGroup, -me.x + PLAYER_SCREEN_X, -me.y + PLAYER_SCREEN_Y)
+    placeLayer(foregroundGroup, -me.x + PLAYER_SCREEN_X, -me.y + PLAYER_SCREEN_Y)
+    placeLayer(nearGroup, -me.x * 0.8, -me.y * 0.8)
+    placeLayer(mountainGroup, -me.x * 0.2, -me.y * 0.2)
+    placeLayer(cloudGroup, -me.x * 0.05, -me.y * 0.05)
     if raceStarted then
       for i = 1, #players do
         if isNearPlayer(i) then

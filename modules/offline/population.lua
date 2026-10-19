@@ -7,6 +7,7 @@ local population = {}
 
 local POPULATION_SIZE = 300
 local FIRST_BOT_ID = 100000
+local WEEK = 7 * 24 * 3600
 
 local function newRandom(seed)
   local state = seed % 2147483647
@@ -104,7 +105,6 @@ local function makeBot(rnd, index, used)
     name = makeName(rnd, used),
     skill = skill,
     rating = rating,
-    weeklyRating = 0,
     games = games,
     wins = wins,
     kills = kills,
@@ -148,7 +148,6 @@ local function simulateElapsedTime()
       bot.deaths = bot.deaths + math.floor(races * (0.9 - bot.skill * 0.4))
       local delta = math.floor((won * 4 - (races - won)) * (0.5 + bot.skill))
       bot.rating = math.max(0, bot.rating + delta)
-      bot.weeklyRating = math.max(0, bot.weeklyRating + delta)
     end
   end
   serverData.save()
@@ -223,20 +222,25 @@ function population.isOnline(bot)
   return rnd() < 0.35 + bot.skill * 0.3
 end
 
-function population.rankingEntry(bot, weekly)
+function population.rankingEntry(bot, rating)
   return {
     u = bot.name,
-    r = weekly and bot.weeklyRating or bot.rating,
+    r = rating or bot.rating,
     a = { bot.avatar[1], bot.avatar[2], bot.avatar[3], bot.avatar[4] },
     s = { bot.wins, bot.games, bot.kills, bot.deaths, bot.suicides },
     i = bot.id,
   }
 end
 
-function population.resetWeek()
-  for _, bot in ipairs(population.load()) do
-    bot.weeklyRating = 0
+-- weekly points grow steadily through the week, so the board is never empty.
+function population.weeklyRating(bot, weekStart, now)
+  local rnd = newRandom(bot.id * 104729 + math.floor(weekStart / 60))
+  if rnd() > 0.35 + bot.skill * 0.6 then
+    return 0
   end
+  local hours = math.max(0, math.min(now, weekStart + WEEK) - weekStart) / 3600
+  local pace = (1 + bot.skill ^ 2 * 15) * (0.5 + rnd())
+  return math.floor(pace * (hours + 8))
 end
 
 population.newRandom = newRandom

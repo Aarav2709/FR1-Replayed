@@ -11,7 +11,7 @@ local socialServer = {}
 local push
 
 local MESSAGE_OF_THE_DAY = ""
-local WEEKLY_PRIZES = { { t = 1 }, { t = 2, v = 20000 }, { t = 2, v = 10000 } }
+local WEEKLY_PRIZES = { { t = 1 }, { t = 2, v = 25000 }, { t = 2, v = 10000 } }
 local DIAMOND_DOE = 198
 
 local function profile()
@@ -66,11 +66,12 @@ local function currentWeekStart()
   return os.time({ year = t.year, month = t.month, day = t.day - daysSinceMonday, hour = 0, min = 0, sec = 0 })
 end
 
-local function weeklyRanking()
+local function weeklyRanking(weekStart, now)
   local list = {}
   for _, bot in ipairs(population.all()) do
-    if bot.weeklyRating > 0 then
-      list[#list + 1] = { name = bot.name, rating = bot.weeklyRating, bot = bot }
+    local rating = population.weeklyRating(bot, weekStart, now)
+    if rating > 0 then
+      list[#list + 1] = { name = bot.name, rating = rating, bot = bot }
     end
   end
   list[#list + 1] = { name = account().username, rating = profile().weeklyRating, self = true }
@@ -87,7 +88,7 @@ local function checkWeekRollover()
     return
   end
   if data.weekStart < weekStart then
-    local ranking = weeklyRanking()
+    local ranking = weeklyRanking(data.weekStart, data.weekStart + WEEK)
     for place = 1, 3 do
       if ranking[place] and ranking[place].self and profile().weeklyRating > 0 then
         local prize = WEEKLY_PRIZES[place]
@@ -101,7 +102,6 @@ local function checkWeekRollover()
       end
     end
     profile().weeklyRating = 0
-    population.resetWeek()
     data.weekStart = weekStart
     serverData.save()
   end
@@ -160,17 +160,18 @@ end
 
 handlers.u = function(_, reply)
   checkWeekRollover()
-  local ranking = weeklyRanking()
+  local weekStart = serverData.get().weekStart
+  local ranking = weeklyRanking(weekStart, os.time())
   local top = {}
   for i = 1, math.min(50, #ranking) do
     local entry = ranking[i]
     if entry.self then
       top[i] = selfEntry(true)
     else
-      top[i] = population.rankingEntry(entry.bot, true)
+      top[i] = population.rankingEntry(entry.bot, entry.rating)
     end
   end
-  local minutesLeft = math.floor((serverData.get().weekStart + WEEK - os.time()) / 60)
+  local minutesLeft = math.floor((weekStart + WEEK - os.time()) / 60)
   reply({ m = "u", l = top, s = selfEntry(true), a = WEEKLY_PRIZES, t = minutesLeft })
 end
 

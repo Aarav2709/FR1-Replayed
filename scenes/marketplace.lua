@@ -10,7 +10,6 @@ local loadingAnimation = require("modules.loadingAnimation")
 local scene = storyboard.newScene()
 
 local AVATARS, HATS, ITEMS, BOOTS = 1, 2, 3, 4
-local GOLD_FOX_ID, DIAMOND_DOE_ID = 199, 198
 
 local homeButton, getMoreButton, buyButton
 local categoryTabs = {}
@@ -48,7 +47,6 @@ function scene:createScene()
   local coins = 0
   local currentList
   local carousel
-  local ownsGoldFox, ownsDiamondDoe = false, false
   local itemTrail, shownTrail, trailTimer = 1, 1, nil
   local panelState = 1
 
@@ -301,23 +299,10 @@ function scene:createScene()
       else
         imageName = entry[4]
       end
-      local image = "images/gui/market/accessories/" .. imageName .. ".png"
-      if imageName == "goldfox" then
-        if ownsGoldFox then
-          local n = #entries + 1
-          entries[n] = { image = image, price = entry[3], bought = owns(entry[2]), index = i, tableIndex = n }
-        end
-      elseif imageName == "diamondDoe" then
-        if ownsDiamondDoe then
-          local n = #entries + 1
-          entries[n] = { image = image, price = entry[3], bought = owns(entry[2]), index = i, tableIndex = n }
-        end
-      else
-        entries[i] = {
-          image = image, price = entry[3], bought = owns(entry[2]), newItem = isNewItem(entry[2]),
-          index = i, tableIndex = i,
-        }
-      end
+      entries[i] = {
+        image = "images/gui/market/accessories/" .. imageName .. ".png", price = entry[3], bought = owns(entry[2]),
+        newItem = isNewItem(entry[2]), index = i, tableIndex = i,
+      }
     end
     carousel = tableViewHorizontal.newList({
       data = entries, onRelease = function() end, onScrollEnd = onScrollEnd,
@@ -335,6 +320,9 @@ function scene:createScene()
         priceText:setFillColor(0.3607843137254902, 0.21568627450980393, 0.06274509803921569)
         priceText.xScale, priceText.yScale = 0.5, 0.5
         priceText.x, priceText.y = 35, 81
+        if priceText.contentWidth > 40 then
+          priceText.xScale = priceText.xScale * 40 / priceText.contentWidth
+        end
         label:insert(priceText)
         return label
       end,
@@ -355,13 +343,6 @@ function scene:createScene()
     if packet.m == "n" then
       if packet.p then
         owned = storyboard.database.getItems()
-        for _, id in ipairs(owned[AVATARS]) do
-          if id == GOLD_FOX_ID then
-            ownsGoldFox = true
-          elseif id == DIAMOND_DOE_ID then
-            ownsDiamondDoe = true
-          end
-        end
         coins = storyboard.database.getMoney()
         setOwned(true)
         setOwned(owns(accessories.getItemId(category, selected)))
@@ -414,25 +395,36 @@ function scene:createScene()
   view:insert(background)
   if extra > 0 then
     local sheet = graphics.newImageSheet("images/gui/background/marketPlace.png", {
-      frames = { { x = 4, y = 0, width = 235, height = 250 }, { x = 140, y = 250, width = 10, height = 570 } },
+      frames = { { x = 140, y = 250, width = 10, height = 570 } },
       sheetContentWidth = 760, sheetContentHeight = 820,
     })
-    local lower = display.newImageRect(view, sheet, 2, extra + 75, 285)
+    local lower = display.newImageRect(view, sheet, 1, extra + 75, 285)
     lower.anchorX, lower.anchorY = 1, 0
     lower.x, lower.y = 175, 35
     local right = 102
     while right > 100 - extra do
-      local awning = display.newImageRect(view, sheet, 1, 117.5, 125)
+      local awning = display.newImageRect(view, "images/gui/background/marketAwning.png", 117.5, 125)
       awning.anchorX, awning.anchorY = 1, 0
       awning.x, awning.y = right, -90
       right = right - 117.5
     end
+    local awningSheet = graphics.newImageSheet("images/gui/background/marketAwning.png", {
+      frames = { { x = 0, y = 47, width = 28, height = 99 } }, sheetContentWidth = 235, sheetContentHeight = 250,
+    })
+    local seam = display.newImageRect(view, awningSheet, 1, 14, 49.5)
+    seam.anchorX, seam.anchorY = 0, 0
+    seam.x, seam.y = 102, -66.5
   end
   local leftBarBackground = display.newImageRect("images/gui/background/marketLeftBar.png", 100, 410)
   leftBarBackground.anchorX, leftBarBackground.anchorY = 0, 0
   leftBarBackground.x, leftBarBackground.y = 0, -90
   leftBar.x = -extra
   leftBar:insert(leftBarBackground)
+  if extra > 0 then
+    local signEdge = display.newImageRect(leftBar, "images/gui/background/marketSignEdge.png", 6, 44)
+    signEdge.anchorX, signEdge.anchorY = 0, 0
+    signEdge.x, signEdge.y = 100, -64
+  end
   statusText = display.newText(storyboard.localized.get("Loading"), 0, 0, font, 40)
   statusText:setFillColor(1, 1, 1)
   statusText.xScale, statusText.yScale = 0.5, 0.5
